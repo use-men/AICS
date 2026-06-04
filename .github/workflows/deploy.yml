@@ -1,0 +1,86 @@
+name: SmartDesk CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ---- 后端测试 ----
+  backend-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+
+      - name: Syntax check
+        run: |
+          cd backend
+          python -m py_compile main.py
+          python -m py_compile app/api/v1/agent.py
+          python -m py_compile app/api/v1/tickets.py
+          python -m py_compile app/api/v1/auth.py
+
+  # ---- 前端构建 ----
+  frontend-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          cd frontend
+          npm ci --legacy-peer-deps
+
+      - name: TypeScript check
+        run: |
+          cd frontend
+          npx tsc --noEmit
+
+      - name: Build
+        run: |
+          cd frontend
+          npm run build
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+
+  # ---- 部署（仅 main 分支 push 时触发）----
+  deploy:
+    needs: [backend-test, frontend-build]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+
+      - name: Deploy info
+        run: |
+          echo "✅ Build successful!"
+          echo "Frontend dist ready for deployment."
+          echo "Configure your deployment target (Vercel/Netlify/Docker) below."
