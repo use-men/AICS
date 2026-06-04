@@ -2,6 +2,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# 使用国内镜像源
+RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/
+
 # 升级 pip
 RUN pip install --no-cache-dir --upgrade pip
 
