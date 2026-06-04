@@ -2,9 +2,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# 升级 pip
+RUN pip install --no-cache-dir --upgrade pip
+
 # 安装依赖
 COPY backend/requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # 复制后端代码
 COPY backend/ .
