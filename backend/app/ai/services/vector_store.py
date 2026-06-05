@@ -31,29 +31,29 @@ VECTOR_STORE_DIR.mkdir(parents=True, exist_ok=True)
 
 class SimpleEmbeddings(Embeddings):
     """
-    Embedding 封装 — 使用 BAAI/bge-small-zh-v1.5 本地模型。
-
-    模型: BAAI/bge-small-zh-v1.5（中文优化，512维）
+    轻量 Embedding — 使用 hash + numpy 生成伪向量。
+    适合演示环境，不需要 PyTorch。
     """
 
-    _model = None
     _dimension = 512
 
-    def __init__(self):
-        if SimpleEmbeddings._model is None:
-            try:
-                from sentence_transformers import SentenceTransformer
-                logger.info("[Embedding] 加载本地模型: BAAI/bge-small-zh-v1.5")
-                SimpleEmbeddings._model = SentenceTransformer("BAAI/bge-small-zh-v1.5")
-                SimpleEmbeddings._dimension = SimpleEmbeddings._model.get_embedding_dimension()
-                logger.info("[Embedding] 模型加载完成，维度: %d", SimpleEmbeddings._dimension)
-            except Exception as e:
-                logger.error("[Embedding] 模型加载失败: %s", e)
-                raise
-
     def _embed(self, texts: list[str]) -> list[list[float]]:
-        embeddings = SimpleEmbeddings._model.encode(texts, normalize_embeddings=True)
-        return embeddings.tolist()
+        import hashlib
+        results = []
+        for text in texts:
+            # 用文本 hash 生成固定维度的伪向量
+            h = hashlib.sha512(text.encode("utf-8")).digest()
+            vec = [b / 255.0 for b in h]
+            # 扩展到 512 维
+            while len(vec) < self._dimension:
+                vec.extend(vec[:self._dimension - len(vec)])
+            vec = vec[:self._dimension]
+            # 归一化
+            norm = sum(x * x for x in vec) ** 0.5
+            if norm > 0:
+                vec = [x / norm for x in vec]
+            results.append(vec)
+        return results
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         return self._embed(texts)
