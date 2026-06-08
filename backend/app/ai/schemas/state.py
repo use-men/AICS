@@ -11,6 +11,20 @@ from enum import Enum
 from typing import Any
 
 
+# ---- Agent 类型枚举（必须在 AgentLog 之前定义） ----
+
+class AgentType(str, Enum):
+    """Agent 类型"""
+    CUSTOMER_SERVICE = "customer_service"
+    TICKET_CLASSIFIER = "ticket_classifier"
+    PRIORITY_ANALYZER = "priority_analyzer"
+    TICKET_CREATOR = "ticket_creator"
+    DISPATCHER = "dispatcher"
+    KNOWLEDGE = "knowledge"
+    TOOL_CALLING = "tool_calling"
+    SUPERVISOR = "supervisor"
+
+
 @dataclass
 class AgentLog:
     """Agent 执行日志"""
@@ -115,18 +129,6 @@ class ToolLog:
             "output_summary": self.output_summary,
             "error": self.error,
         }
-
-
-class AgentType(str, Enum):
-    """Agent 类型枚举"""
-    CUSTOMER_SERVICE = "cs_agent"           # AI 客服
-    TICKET_CLASSIFIER = "ticket_classifier"  # 工单分类
-    PRIORITY_ANALYZER = "priority_analyzer"  # 优先级分析
-    TICKET_CREATOR = "ticket_creator"        # 工单创建
-    DISPATCHER = "dispatcher"                # 智能派单
-    KNOWLEDGE = "knowledge_agent"            # 知识库问答
-    TOOL_CALLING = "tool_calling"            # Tool Calling
-    SUPERVISOR = "supervisor"                # 统一调度
 
 
 class TaskStatus(str, Enum):
