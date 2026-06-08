@@ -3,6 +3,7 @@ uvicorn[standard]
 sqlalchemy[asyncio]
 aiomysql
 pydantic
+python-multipart
 pydantic-settings
 pydantic[email]
 python-jose[cryptography]
