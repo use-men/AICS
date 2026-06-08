@@ -152,24 +152,30 @@ class DispatchService:
         return round(total_score, 2)
 
     async def get_available_agents(self, db: AsyncSession) -> list[dict]:
-        """获取所有可用客服"""
+        """获取所有客服（包括关联的用户信息）"""
         result = await db.execute(
-            select(CustomerService).where(
-                CustomerService.is_active == True,
-                CustomerService.online_status.in_(["online", "busy"]),
-            ).order_by(CustomerService.current_ticket_count)
+            select(CustomerService).order_by(CustomerService.current_ticket_count)
         )
         agents = result.scalars().all()
 
         return [
             {
                 "id": agent.id,
+                "user_id": agent.user_id,
                 "name": agent.name,
                 "skill_type": agent.skill_type,
                 "current_ticket_count": agent.current_ticket_count,
                 "max_ticket_count": agent.max_ticket_count,
                 "online_status": agent.online_status,
+                "is_active": agent.is_active,
                 "load_ratio": agent.load_ratio,
+                "user": {
+                    "id": agent.user.id,
+                    "username": agent.user.username,
+                    "nickname": agent.user.nickname,
+                    "avatar": agent.user.avatar,
+                    "employee_id": agent.user.employee_id,
+                } if agent.user else None,
             }
             for agent in agents
         ]

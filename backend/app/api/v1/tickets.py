@@ -205,6 +205,37 @@ async def get_ticket(
 
 
 # ============================================================
+#  3.5 删除工单
+# ============================================================
+
+@router.delete("/{ticket_id}")
+async def delete_ticket(
+    ticket_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Ticket).where(Ticket.id == ticket_id))
+    ticket = result.scalar_one_or_none()
+    if not ticket:
+        raise HTTPException(status_code=404, detail="工单不存在")
+
+    # 只能删除自己的工单，或管理员/客服可以删除任何工单
+    allowed_roles = {"admin", "supervisor", "customer_service"}
+    is_owner = ticket.user_id == current_user.id
+    is_privileged = allowed_roles.intersection(set(current_user.role_codes))
+    if not is_owner and not is_privileged:
+        raise HTTPException(status_code=403, detail="无权删除此工单")
+
+    from sqlalchemy import text
+    # 先删除关联数据，避免 lazy load 异步错误
+    await db.execute(text("DELETE FROM ticket_messages WHERE ticket_id = :tid"), {"tid": ticket_id})
+    await db.execute(text("DELETE FROM ticket_replies WHERE ticket_id = :tid"), {"tid": ticket_id})
+    await db.execute(text("DELETE FROM tickets WHERE id = :tid"), {"tid": ticket_id})
+    await db.commit()
+    return {"message": "工单已删除"}
+
+
+# ============================================================
 #  4. 更新工单状态
 # ============================================================
 

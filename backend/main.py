@@ -1,6 +1,7 @@
 """
 SmartDesk — FastAPI Application Entry Point
 """
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -11,6 +12,14 @@ from fastapi.responses import FileResponse
 from app.core.config import settings
 from app.core.redis import close_redis
 from app.api.v1.router import api_v1_router
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+# 设置 AI 模块的日志级别
+logging.getLogger("app.ai").setLevel(logging.INFO)
 
 
 @asynccontextmanager
@@ -37,7 +46,7 @@ async def health_check():
 
 
 # 前端静态文件
-FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
+FRONTEND_DIST = Path(__file__).parent / "frontend" / "dist"
 if FRONTEND_DIST.exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="static-assets")
 

@@ -4,7 +4,7 @@ AgentManager — Agent 生命周期管理器。
 职责:
     1. 注册 / 注销 Agent
     2. 按名称获取 Agent 实例
-    3. 统一调用入口（invoke / stream）
+    3. 统一调用入口（run / invoke / stream）
     4. 健康检查
 """
 
@@ -12,6 +12,7 @@ import logging
 from typing import Any, AsyncIterator
 
 from app.ai.agents.base import BaseAgent
+from app.ai.schemas import AgentState
 
 logger = logging.getLogger(__name__)
 
@@ -65,11 +66,30 @@ class AgentManager:
         """所有已注册的 Agent 名称"""
         return list(self._agents.keys())
 
-    # ---- 调用 ----
+    # ---- 调用（新接口） ----
+
+    async def run(self, agent_name: str, state: AgentState) -> AgentState:
+        """
+        统一执行入口。
+
+        Args:
+            agent_name: Agent 名称
+            state: 当前 Agent 状态
+
+        Returns:
+            更新后的 Agent 状态
+        """
+        agent = self.get_or_raise(agent_name)
+        logger.info("[AgentManager] run: %s | input: %s", agent_name, state.user_input[:100])
+        result = await agent.run(state)
+        logger.info("[AgentManager] result: %s | status: %s", agent_name, result.status.value)
+        return result
+
+    # ---- 调用（兼容旧接口） ----
 
     async def invoke(self, agent_name: str, input_text: str, **kwargs: Any) -> str:
         """
-        调用指定 Agent。
+        调用指定 Agent（兼容旧接口）。
 
         Args:
             agent_name: Agent 名称
@@ -111,6 +131,7 @@ class AgentManager:
             "agents": {
                 name: {
                     "class": agent.__class__.__name__,
+                    "type": agent.agent_type.value if hasattr(agent, 'agent_type') else "unknown",
                     "tools": [t.name for t in agent.tools],
                 }
                 for name, agent in self._agents.items()

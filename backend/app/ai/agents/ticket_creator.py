@@ -10,6 +10,7 @@ import time
 from typing import Any, AsyncIterator
 
 from app.ai.agents.base import BaseAgent
+from app.ai.schemas import AgentState, AgentType, TaskStatus, TicketInfo
 from app.ai.prompts.templates import TICKET_CREATION_SYSTEM
 from app.ai.memory.manager import memory_manager
 
@@ -31,6 +32,10 @@ class TicketCreationAgent(BaseAgent):
         return "ticket_creator"
 
     @property
+    def agent_type(self) -> AgentType:
+        return AgentType.TICKET_CREATOR
+
+    @property
     def system_prompt(self) -> str:
         return TICKET_CREATION_SYSTEM
 
@@ -38,9 +43,88 @@ class TicketCreationAgent(BaseAgent):
     def _temperature(self) -> float:
         return 0.2
 
+    # ---- 核心接口（统一入口） ----
+
+    async def run(self, state: AgentState) -> AgentState:
+        """
+        统一执行入口。
+
+        Args:
+            state: 当前 Agent 状态
+
+        Returns:
+            更新后的 Agent 状态，包含 ticket_info
+        """
+        state.agent_type = self.agent_type
+        state.status = TaskStatus.PROCESSING
+
+        try:
+            # 1. 获取对话历史
+            history_text = ""
+            if state.history:
+                history_lines = [f"{'用户' if h['role'] == 'user' else '助手'}: {h['content']}" for h in state.history[-6:]]
+                history_text = "\n".join(history_lines)
+            else:
+                history = memory_manager.get_history(state.conversation_id)
+                if history:
+                    history_lines = []
+                    for msg in history[-6:]:
+                        role = "用户" if msg.type == "human" else "助手"
+                        history_lines.append(f"{role}: {msg.content}")
+                    history_text = "\n".join(history_lines)
+
+            # 2. 调用 LLM 生成工单信息
+            prompt = self.system_prompt.format(
+                question=state.user_input,
+                history=history_text or "无",
+            )
+
+            messages = [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": state.user_input},
+            ]
+
+            response = await self.llm.ainvoke(messages)
+            ticket_data = self._parse_response(response.content)
+
+            # 3. 保存到数据库
+            ticket_id = await self._save_ticket(
+                title=ticket_data["title"],
+                content=state.user_input,
+                ticket_type=ticket_data["ticket_type"],
+                priority=ticket_data["priority"],
+                description=ticket_data["description"],
+                user_id=state.user_id,
+            )
+
+            # 4. 更新 State
+            state.ticket_info = TicketInfo(
+                ticket_no=f"TK{ticket_id:06d}",
+                title=ticket_data["title"],
+                content=state.user_input,
+                ticket_type=ticket_data["ticket_type"],
+                priority=ticket_data["priority"],
+                status="pending",
+                user_id=state.user_id,
+            )
+            state.ticket_id = ticket_id
+            state.ticket_type = ticket_data["ticket_type"]
+            state.ticket_priority = ticket_data["priority"]
+
+            state.status = TaskStatus.COMPLETED
+
+        except Exception as e:
+            logger.error("[TicketCreator] 调用失败: %s", e)
+            state.error = str(e)
+            state.status = TaskStatus.FAILED
+
+        return state
+
+    # ---- 兼容旧接口 ----
+
     async def invoke(self, input_text: str, **kwargs: Any) -> str:
         """
-        生成工单信息并保存到数据库。
+        生成工单信息并保存到数据库（兼容旧接口）。
 
         Args:
             input_text: 用户原始问题
@@ -49,55 +133,18 @@ class TicketCreationAgent(BaseAgent):
         Returns:
             JSON 字符串，包含 ticket_id, title, ticket_type, priority
         """
-        conversation_id = kwargs.get("conversation_id", "default")
-        user_id = kwargs.get("user_id")
-        history_text = kwargs.get("history_text", "")
+        state = self._create_state(input_text, **kwargs)
+        state = await self.run(state)
 
-        try:
-            # 1. 获取对话历史（如果未提供）
-            if not history_text:
-                history = memory_manager.get_history(conversation_id)
-                if history:
-                    lines = []
-                    for msg in history[-6:]:
-                        role = "用户" if msg.type == "human" else "助手"
-                        lines.append(f"{role}: {msg.content}")
-                    history_text = "\n".join(lines)
-
-            # 2. 调用 LLM 生成工单信息
-            prompt = self.system_prompt.format(
-                question=input_text,
-                history=history_text or "无",
-            )
-
-            messages = [
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": input_text},
-            ]
-
-            response = await self.llm.ainvoke(messages)
-            ticket_info = self._parse_response(response.content)
-
-            # 3. 保存到数据库
-            ticket_id = await self._save_ticket(
-                title=ticket_info["title"],
-                content=input_text,
-                ticket_type=ticket_info["ticket_type"],
-                priority=ticket_info["priority"],
-                description=ticket_info["description"],
-                user_id=user_id,
-            )
-
+        if state.ticket_info:
             return json.dumps({
-                "ticket_id": ticket_id,
-                "title": ticket_info["title"],
-                "ticket_type": ticket_info["ticket_type"],
-                "priority": ticket_info["priority"],
-                "description": ticket_info["description"],
+                "ticket_id": state.ticket_id,
+                "title": state.ticket_info.title,
+                "ticket_type": state.ticket_info.ticket_type,
+                "priority": state.ticket_info.priority,
+                "description": state.ticket_info.content,
             }, ensure_ascii=False)
-
-        except Exception as e:
-            logger.error("[TicketCreator] 调用失败: %s", e)
+        else:
             return json.dumps({
                 "ticket_id": None,
                 **DEFAULT_RESULT,

@@ -164,6 +164,8 @@ export const logoutThunk = createAsyncThunk(
   async (_, { dispatch }) => {
     try { await authAPI.logout(); } catch { /* ignore */ }
     dispatch(logoutAction());
+    // 清空聊天状态
+    dispatch({ type: 'chat/clearMessages' });
   },
 );
 
@@ -185,6 +187,11 @@ const authSlice = createSlice({
     },
     clearError(state) {
       state.error = null;
+    },
+    updateUserInfo(state, action) {
+      if (state.user) {
+        state.user = { ...state.user, ...action.payload };
+      }
     },
   },
   extraReducers: (builder) => {
@@ -253,5 +260,5 @@ const authSlice = createSlice({
   },
 });
 
-export const { logoutAction, clearError } = authSlice.actions;
+export const { logoutAction, clearError, updateUserInfo } = authSlice.actions;
 export default authSlice.reducer;

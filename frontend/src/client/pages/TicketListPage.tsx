@@ -3,10 +3,10 @@
  */
 
 import { useState, useEffect } from 'react';
-import { Card, Table, Tag, Button, Space, Select, Badge, Modal, Form, Input, message } from 'antd';
-import { PlusOutlined, ReloadOutlined, EyeOutlined } from '@ant-design/icons';
+import { Card, Table, Tag, Button, Space, Select, Badge, Modal, Form, Input, message, Popconfirm } from 'antd';
+import { PlusOutlined, ReloadOutlined, EyeOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
-import { fetchTickets, createTicket, getUnreadCounts } from '@/shared/api/ticket';
+import { fetchTickets, createTicket, deleteTicket, getUnreadCounts } from '@/shared/api/ticket';
 import { useAppSelector } from '@/store/hooks';
 
 const PRIORITY_COLORS: Record<string, string> = { urgent: 'red', high: 'orange', medium: 'blue', low: 'green' };
@@ -62,6 +62,16 @@ const TicketListPage: React.FC = () => {
     return () => window.removeEventListener('focus', handleFocus);
   }, [page, statusFilter]);
 
+  const handleDelete = async (id: number) => {
+    try {
+      await deleteTicket(id);
+      message.success('工单已删除');
+      fetchData();
+    } catch {
+      message.error('删除失败');
+    }
+  };
+
   const handleCreate = async () => {
     try {
       const values = await form.validateFields();
@@ -95,7 +105,14 @@ const TicketListPage: React.FC = () => {
     { title: '优先级', dataIndex: 'priority', key: 'priority', width: 80, render: (p: string) => <Tag color={PRIORITY_COLORS[p]}>{PRIORITY_LABELS[p] || p}</Tag> },
     { title: '状态', dataIndex: 'status', key: 'status', width: 100, render: (s: string) => <Tag color={STATUS_COLORS[s]}>{STATUS_LABELS[s] || s}</Tag> },
     { title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 160, render: (t: string) => t ? new Date(t).toLocaleString('zh-CN') : '-' },
-    { title: '操作', key: 'action', width: 80, render: (_: any, r: any) => <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => navigate(`/tickets/${r.id}`)}>详情</Button> },
+    { title: '操作', key: 'action', width: 120, render: (_: any, r: any) => (
+      <Space>
+        <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => navigate(`/tickets/${r.id}`)}>详情</Button>
+        <Popconfirm title="确定删除此工单？" onConfirm={() => handleDelete(r.id)} okText="删除" cancelText="取消">
+          <Button type="link" size="small" danger icon={<DeleteOutlined />}>删除</Button>
+        </Popconfirm>
+      </Space>
+    )},
   ];
 
   return (
@@ -111,6 +128,7 @@ const TicketListPage: React.FC = () => {
       }
     >
       <Table dataSource={tickets} columns={columns} rowKey="id" loading={loading}
+        scroll={{ x: 800 }}
         pagination={{ current: page, total, pageSize: 10, onChange: setPage, showTotal: (t) => `共 ${t} 条` }} />
 
       <Modal title="创建工单" open={createOpen} onOk={handleCreate} onCancel={() => setCreateOpen(false)} confirmLoading={createLoading} okText="提交">

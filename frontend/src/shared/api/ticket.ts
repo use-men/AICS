@@ -20,6 +20,10 @@ export const fetchTickets = (params?: {
 export const getTicketDetail = (id: number) =>
   request.get(`/tickets/${id}`);
 
+// ---- 删除工单 ----
+export const deleteTicket = (id: number) =>
+  request.delete(`/tickets/${id}`);
+
 // ---- 更新状态 ----
 export const updateTicketStatus = (id: number, status: string) =>
   request.put(`/tickets/${id}/status`, { status });

@@ -183,13 +183,16 @@ async def seed():
         # ---- 2. 创建角色 ----
         role_map: dict[str, Role] = {}
         for key, role_def in ROLES.items():
-            result = await db.execute(select(Role).where(Role.code == role_def["code"]))
+            result = await db.execute(
+                select(Role).where(Role.code == role_def["code"])
+            )
             role = result.scalar_one_or_none()
             if not role:
                 role = Role(name=role_def["name"], code=role_def["code"])
                 db.add(role)
                 await db.flush()
-            # 绑定权限
+            # 绑定权限（先刷新关系，避免 async greenlet 错误）
+            await db.refresh(role, ["permissions"])
             role.permissions = [perm_map[p] for p in role_def["permissions"] if p in perm_map]
             role_map[key] = role
         print(f"✅ 角色已就绪 ({len(role_map)} 个)")

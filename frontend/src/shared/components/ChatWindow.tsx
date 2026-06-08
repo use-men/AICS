@@ -71,6 +71,24 @@ const ChatWindow: React.FC<ChatWindowProps> = ({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // 监听常用回复填入事件
+  useEffect(() => {
+    const handleQuickReplySelect = (e: CustomEvent) => {
+      setInputValue(e.detail);
+    };
+    const handleQuickReplySend = (e: CustomEvent) => {
+      sendMessage(e.detail, 'text');
+    };
+
+    window.addEventListener('quick-reply-select', handleQuickReplySelect as EventListener);
+    window.addEventListener('quick-reply-send', handleQuickReplySend as EventListener);
+
+    return () => {
+      window.removeEventListener('quick-reply-select', handleQuickReplySelect as EventListener);
+      window.removeEventListener('quick-reply-send', handleQuickReplySend as EventListener);
+    };
+  }, [sendMessage]);
+
   // ---- 发送消息 ----
 
   const handleSend = () => {

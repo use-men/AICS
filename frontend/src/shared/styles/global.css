@@ -1,6 +1,7 @@
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  transition: background-color 0.3s, color 0.3s;
 }
 
 .page-container {
@@ -9,4 +10,195 @@ body {
 
 .page-header {
   margin-bottom: 24px;
+}
+
+/* ===== Dark Theme ===== */
+body[data-theme="dark"] {
+  background-color: #121212;
+  color: #e8e8e8;
+}
+
+/* 卡片 */
+body[data-theme="dark"] .ant-card {
+  background-color: #1e1e1e;
+  border-color: #333;
+}
+
+body[data-theme="dark"] .ant-card-head {
+  background-color: #1e1e1e;
+  border-bottom-color: #333;
+  color: #e8e8e8;
+}
+
+/* 表格 */
+body[data-theme="dark"] .ant-table {
+  background-color: #1e1e1e;
+}
+
+body[data-theme="dark"] .ant-table-thead > tr > th {
+  background-color: #2a2a2a;
+  color: #e8e8e8;
+  border-bottom-color: #333;
+}
+
+body[data-theme="dark"] .ant-table-tbody > tr > td {
+  border-bottom-color: #333;
+}
+
+body[data-theme="dark"] .ant-table-tbody > tr:hover > td {
+  background-color: #2a2a2a;
+}
+
+body[data-theme="dark"] .ant-table-wrapper .ant-table {
+  background-color: #1e1e1e;
+}
+
+body[data-theme="dark"] .ant-table-cell-row-hover {
+  background-color: #2a2a2a !important;
+}
+
+/* 输入框 */
+body[data-theme="dark"] .ant-input,
+body[data-theme="dark"] .ant-input-affix-wrapper,
+body[data-theme="dark"] .ant-select-selector,
+body[data-theme="dark"] .ant-picker {
+  background-color: #1e1e1e;
+  border-color: #333;
+  color: #e8e8e8;
+}
+
+body[data-theme="dark"] .ant-input:focus,
+body[data-theme="dark"] .ant-input-focused,
+body[data-theme="dark"] .ant-input-affix-wrapper:focus,
+body[data-theme="dark"] .ant-input-affix-wrapper-focused {
+  border-color: #667eea;
+  box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+}
+
+/* 下拉菜单 */
+body[data-theme="dark"] .ant-dropdown-menu {
+  background-color: #1e1e1e;
+  border-color: #333;
+}
+
+body[data-theme="dark"] .ant-dropdown-menu-item:hover {
+  background-color: #2a2a2a;
+}
+
+/* 模态框 */
+body[data-theme="dark"] .ant-modal-content {
+  background-color: #1e1e1e;
+}
+
+body[data-theme="dark"] .ant-modal-header {
+  background-color: #1e1e1e;
+  border-bottom-color: #333;
+}
+
+body[data-theme="dark"] .ant-modal-title {
+  color: #e8e8e8;
+}
+
+/* 标签 */
+body[data-theme="dark"] .ant-tag {
+  border-color: #333;
+}
+
+/* 分页器 */
+body[data-theme="dark"] .ant-pagination-item {
+  background-color: #1e1e1e;
+  border-color: #333;
+}
+
+body[data-theme="dark"] .ant-pagination-item a {
+  color: #e8e8e8;
+}
+
+body[data-theme="dark"] .ant-pagination-item-active {
+  background-color: #667eea;
+  border-color: #667eea;
+}
+
+/* 统计 */
+body[data-theme="dark"] .ant-statistic-title {
+  color: #8c8c8c;
+}
+
+body[data-theme="dark"] .ant-statistic-content {
+  color: #e8e8e8;
+}
+
+/* 空状态 */
+body[data-theme="dark"] .ant-empty-description {
+  color: #8c8c8c;
+}
+
+/* 描述列表 */
+body[data-theme="dark"] .ant-descriptions-item-label {
+  background-color: #2a2a2a;
+  color: #8c8c8c;
+}
+
+body[data-theme="dark"] .ant-descriptions-item-content {
+  background-color: #1e1e1e;
+  color: #e8e8e8;
+}
+
+/* 抽屉 */
+body[data-theme="dark"] .ant-drawer-content {
+  background-color: #1e1e1e;
+}
+
+body[data-theme="dark"] .ant-drawer-header {
+  background-color: #1e1e1e;
+  border-bottom-color: #333;
+}
+
+body[data-theme="dark"] .ant-drawer-title {
+  color: #e8e8e8;
+}
+
+/* 通知 */
+body[data-theme="dark"] .ant-notification-notice {
+  background-color: #1e1e1e;
+}
+
+/* 消息 */
+body[data-theme="dark"] .ant-message-notice-content {
+  background-color: #1e1e1e;
+  color: #e8e8e8;
+}
+
+/* 工具提示 */
+body[data-theme="dark"] .ant-tooltip-inner {
+  background-color: #333;
+  color: #e8e8e8;
+}
+
+/* ===== 移动端适配 ===== */
+@media (max-width: 768px) {
+  .page-container {
+    padding: 12px;
+  }
+
+  .ant-table-wrapper {
+    overflow-x: auto;
+  }
+
+  .ant-card-head {
+    min-height: 40px;
+    padding: 0 12px;
+  }
+
+  .ant-card-body {
+    padding: 12px;
+  }
+
+  .ant-statistic-title {
+    font-size: 12px;
+  }
+
+  .ant-statistic-content {
+    font-size: 20px !important;
+  }
 }

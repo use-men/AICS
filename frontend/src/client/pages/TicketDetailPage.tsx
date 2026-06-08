@@ -2,23 +2,23 @@
  * TicketDetailPage — 工单详情 + 实时聊天
  *
  * 用户端/客服端共用。
- * 上半部分: 工单信息
- * 下半部分: WebSocket 实时聊天窗口
- *
- * 客服端额外功能:
- * - AI 推荐回复按钮
+ * 客服端：左侧工具栏 + 右侧聊天
+ * 用户端：工单信息 + 提示
  */
 
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Card, Tag, Typography, Button, Space, Spin, message, Tooltip } from 'antd';
+import { Card, Tag, Typography, Button, Space, Spin, message, Alert, Tabs } from 'antd';
 import {
   ArrowLeftOutlined,
-  RobotOutlined, CheckOutlined, MessageOutlined,
+  RobotOutlined, MessageOutlined, InfoCircleOutlined,
+  FileTextOutlined, ToolOutlined,
 } from '@ant-design/icons';
-import { getTicketDetail, suggestCSReply } from '@/shared/api/ticket';
+import { getTicketDetail } from '@/shared/api/ticket';
 import { useAppSelector } from '@/store/hooks';
 import ChatWindow from '@/shared/components/ChatWindow';
+import QuickReplies from '@/shared/components/QuickReplies';
+import TicketStatusSwitcher from '@/shared/components/TicketStatusSwitcher';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -38,10 +38,6 @@ const TicketDetailPage: React.FC = () => {
   const [ticket, setTicket] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
-  // AI 推荐回复
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiSuggestion, setAiSuggestion] = useState('');
-
   /** 判断当前用户是否是客服端 */
   const isCSAgent = user?.roles?.some((r) => CS_ROLE_CODES.has(r)) ?? false;
   const userType: 'user' | 'service' = isCSAgent ? 'service' : 'user';
@@ -57,30 +53,30 @@ const TicketDetailPage: React.FC = () => {
 
   useEffect(() => { fetchDetail(); }, [id]);
 
-  /** AI 推荐回复 */
-  const handleAISuggest = async () => {
-    setAiLoading(true);
-    setAiSuggestion('');
-    try {
-      const res: any = await suggestCSReply(Number(id));
-      setAiSuggestion(res.suggested_reply || '暂无推荐回复');
-    } catch { message.error('AI 推荐失败'); }
-    finally { setAiLoading(false); }
+  /** 常用回复选择 */
+  const handleQuickReplySelect = (content: string) => {
+    window.dispatchEvent(new CustomEvent('quick-reply-select', { detail: content }));
+  };
+
+  /** 常用回复发送 */
+  const handleQuickReplySend = (content: string) => {
+    window.dispatchEvent(new CustomEvent('quick-reply-send', { detail: content }));
   };
 
   if (loading) return <Spin size="large" style={{ display: 'block', marginTop: 100, textAlign: 'center' }} />;
   if (!ticket) return <div>工单不存在</div>;
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, height: 'calc(100vh - 160px)' }}>
-      {/* 工单信息头部 */}
-      <Card size="small">
-        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+  // ==================== 用户端 ====================
+  if (!isCSAgent) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, height: 'calc(100vh - 160px)' }}>
+        {/* 头部 */}
+        <Card size="small" style={{ background: '#fff' }}>
           <Space>
             <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)} size="small">返回</Button>
             <Title level={5} style={{ margin: 0 }}>{ticket.ticket_no} — {ticket.title}</Title>
           </Space>
-          <Space wrap size={4}>
+          <Space wrap size={4} style={{ marginTop: 8 }}>
             <Tag>{TYPE_LABELS[ticket.ticket_type] || ticket.ticket_type}</Tag>
             <Tag color={PRIORITY_COLORS[ticket.priority]}>{PRIORITY_LABELS[ticket.priority]}</Tag>
             <Tag color={STATUS_COLORS[ticket.status]}>{STATUS_LABELS[ticket.status]}</Tag>
@@ -88,92 +84,123 @@ const TicketDetailPage: React.FC = () => {
               创建: {ticket.created_at ? new Date(ticket.created_at).toLocaleString('zh-CN') : '-'}
             </Text>
           </Space>
-        </Space>
-      </Card>
+        </Card>
 
-      {/* 主体: 问题描述 + 聊天 */}
-      <div style={{ flex: 1, display: 'flex', gap: 16, minHeight: 0 }}>
-        {/* 左侧: 问题描述 + AI 推荐 */}
-        <div style={{ width: 320, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <Card size="small" title="问题描述" style={{ flex: 1, overflow: 'auto' }}>
-            <Paragraph style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 13 }}>
-              {ticket.content}
-            </Paragraph>
-          </Card>
+        {/* 问题描述 */}
+        <Card size="small" title="问题描述" style={{ flex: 1 }}>
+          <Paragraph style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 14, lineHeight: 1.8 }}>
+            {ticket.content}
+          </Paragraph>
+        </Card>
 
-          {/* AI 推荐回复（仅客服端） */}
-          {isCSAgent && (
-            <Card size="small" title={<span><RobotOutlined /> AI 推荐</span>}>
-              <Tooltip title="基于知识库 + 工单上下文生成推荐回复">
-                <Button
-                  icon={<RobotOutlined />}
-                  onClick={handleAISuggest}
-                  loading={aiLoading}
-                  block
-                  style={{ borderColor: '#722ed1', color: '#722ed1', fontWeight: 500 }}
-                >
-                  {aiLoading ? 'AI 生成中...' : 'AI 推荐回复'}
-                </Button>
-              </Tooltip>
+        {/* 提示 */}
+        <Alert
+          message="如需与客服沟通，请通过 AI 对话界面发起"
+          description={
+            <Button
+              type="link"
+              icon={<RobotOutlined />}
+              onClick={() => navigate('/chat')}
+              style={{ padding: 0, marginTop: 4 }}
+            >
+              前往 AI 对话
+            </Button>
+          }
+          type="info"
+          showIcon
+          icon={<InfoCircleOutlined />}
+        />
+      </div>
+    );
+  }
 
-              {aiSuggestion && (
-                <div style={styles.aiSuggestion}>
-                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
-                    <RobotOutlined style={{ color: '#722ed1', marginRight: 6 }} />
-                    <Text strong style={{ fontSize: 12, color: '#722ed1' }}>推荐回复</Text>
-                  </div>
-                  <Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: 12, lineHeight: 1.5 }}>
-                    {aiSuggestion}
-                  </Paragraph>
-                  <Button
-                    type="link"
-                    size="small"
-                    icon={<CheckOutlined />}
-                    onClick={() => {
-                      navigator.clipboard.writeText(aiSuggestion);
-                      message.success('已复制到剪贴板');
-                    }}
-                    style={{ padding: 0, fontSize: 11, marginTop: 4 }}
-                  >
-                    复制回复
-                  </Button>
-                </div>
-              )}
-            </Card>
-          )}
+  // ==================== 客服端 ====================
+  return (
+    <div style={{ display: 'flex', height: 'calc(100vh - 160px)', gap: 0, background: '#f0f2f5', borderRadius: 8, overflow: 'hidden' }}>
+      {/* 左侧工具栏 */}
+      <div style={{ width: 300, flexShrink: 0, display: 'flex', flexDirection: 'column', background: '#fff', borderRight: '1px solid #e8e8e8' }}>
+        {/* 工单信息卡片 */}
+        <div style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', padding: '12px 16px' }}>
+          <Space>
+            <Button
+              icon={<ArrowLeftOutlined />}
+              onClick={() => navigate(-1)}
+              size="small"
+              style={{ color: '#fff', borderColor: 'rgba(255,255,255,0.3)', background: 'transparent' }}
+            >
+              返回
+            </Button>
+          </Space>
+          <div style={{ marginTop: 8 }}>
+            <Title level={5} style={{ margin: 0, color: '#fff', fontSize: 15 }}>{ticket.ticket_no}</Title>
+            <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 12 }}>{ticket.title}</Text>
+          </div>
+          <Space wrap size={4} style={{ marginTop: 8 }}>
+            <Tag style={{ background: 'rgba(255,255,255,0.2)', color: '#fff', border: 'none', fontSize: 11 }}>
+              {TYPE_LABELS[ticket.ticket_type]}
+            </Tag>
+            <Tag style={{ background: 'rgba(255,255,255,0.2)', color: '#fff', border: 'none', fontSize: 11 }}>
+              {PRIORITY_LABELS[ticket.priority]}
+            </Tag>
+          </Space>
         </div>
 
-        {/* 右侧: 实时聊天窗口 */}
-        <Card
-          size="small"
-          title={<span><MessageOutlined /> 实时聊天</span>}
-          style={{ flex: 1, display: 'flex', flexDirection: 'column' }}
-          styles={{ body: { flex: 1, padding: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } }}
-        >
-          <div style={{ flex: 1, minHeight: 0 }}>
-            <ChatWindow
-              ticketId={Number(id)}
-              userId={user?.id || 0}
-              userType={userType}
-              ticketTitle={ticket.title}
-            />
+        {/* 工单状态 */}
+        <div style={{ padding: '12px', borderBottom: '1px solid #f0f0f0' }}>
+          <TicketStatusSwitcher
+            ticketId={ticket.id}
+            currentStatus={ticket.status}
+            onStatusChange={(newStatus) => {
+              setTicket({ ...ticket, status: newStatus });
+            }}
+            style={{ border: 'none', boxShadow: 'none' }}
+          />
+        </div>
+
+        {/* 问题描述 */}
+        <div style={{ padding: '12px', borderBottom: '1px solid #f0f0f0', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+            <FileTextOutlined style={{ color: '#666', fontSize: 12 }} />
+            <Text strong style={{ fontSize: 12, color: '#666' }}>问题描述</Text>
           </div>
-        </Card>
+          <Paragraph style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 12, lineHeight: 1.5, color: '#333', maxHeight: 100, overflow: 'auto' }}>
+            {ticket.content}
+          </Paragraph>
+        </div>
+
+        {/* 常用回复 */}
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          <QuickReplies
+            onSelect={handleQuickReplySelect}
+            onSend={handleQuickReplySend}
+            style={{ height: '100%', border: 'none', borderRadius: 0 }}
+          />
+        </div>
+      </div>
+
+      {/* 右侧聊天区域 */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#fff' }}>
+        {/* 聊天头部 */}
+        <div style={{ padding: '10px 16px', borderBottom: '1px solid #e8e8e8', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Space>
+            <MessageOutlined style={{ color: '#666' }} />
+            <Text strong style={{ fontSize: 13 }}>实时聊天</Text>
+          </Space>
+          <Tag color="green" style={{ fontSize: 11 }}>在线</Tag>
+        </div>
+
+        {/* 聊天内容 */}
+        <div style={{ flex: 1, minHeight: 0 }}>
+          <ChatWindow
+            ticketId={Number(id)}
+            userId={user?.id || 0}
+            userType={userType}
+            ticketTitle={ticket.title}
+          />
+        </div>
       </div>
     </div>
   );
-};
-
-// ---- 样式 ----
-
-const styles: Record<string, React.CSSProperties> = {
-  aiSuggestion: {
-    marginTop: 8,
-    padding: '8px 10px',
-    background: '#f9f0ff',
-    borderRadius: 6,
-    border: '1px solid #d3adf7',
-  },
 };
 
 export default TicketDetailPage;

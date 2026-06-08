@@ -4,10 +4,12 @@ Agent API — AI Agent 相关接口。
 
 import json
 import logging
+from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -20,6 +22,8 @@ from app.ai.services.ticket import (
     ClassifyResponse,
     ticket_service,
 )
+from app.ai.agents.supervisor import supervisor_agent
+from app.ai.schemas import AgentState
 
 logger = logging.getLogger(__name__)
 
@@ -310,6 +314,8 @@ class CSRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000, description="用户消息")
     conversation_id: str = Field(default="default", description="会话ID")
     user_id: int | None = Field(default=None, description="用户ID")
+    deep_thinking: bool = Field(default=False, description="是否开启深度思考模式")
+    ticket_id: int | None = Field(default=None, description="当前工单ID（hybrid模式）")
 
 
 class CSResponse(BaseModel):
@@ -334,21 +340,39 @@ async def customer_service_chat(payload: CSRequest) -> CSResponse:
     """
     用户端 AI 客服对话。
 
-    - 基于知识库自动回答用户问题
-    - 无法解决时自动创建工单 + 派单 + 通知客服
+    - 基于 Multi-Agent 架构
+    - SupervisorAgent → SmartDeskGraph → ToolCallingAgent → KnowledgeAgent
+    - 需要转人工时自动创建工单 + 派单
     - 支持多轮对话
     """
     try:
-        raw = await agent_manager.invoke(
-            "cs_agent",
-            payload.message,
+        # 构建 AgentState
+        state = AgentState(
+            user_input=payload.message,
+            user_id=payload.user_id or 0,
             conversation_id=payload.conversation_id,
-            user_id=payload.user_id,
         )
-        result = json.loads(raw)
 
+        # 调用 SupervisorAgent（内部使用 SmartDeskGraph）
+        state = await supervisor_agent.run(state)
+
+        # 构建返回结果
+        result = {
+            "answer": state.answer,
+            "need_human": state.need_human,
+            "sources": [
+                {
+                    "question": sr.question,
+                    "answer": sr.answer[:200],
+                    "score": round(sr.score, 3),
+                }
+                for sr in state.knowledge_results
+            ],
+        }
+
+        # 如果需要转人工，执行转人工流程
         ticket_id = None
-        if result.get("need_human"):
+        if state.need_human and not state.ticket_id:
             transfer = await _auto_transfer(
                 content=payload.message,
                 conversation_id=payload.conversation_id,
@@ -356,6 +380,12 @@ async def customer_service_chat(payload: CSRequest) -> CSResponse:
             )
             if transfer:
                 ticket_id = transfer.get("ticket_id")
+                state.ticket_id = ticket_id
+        else:
+            ticket_id = state.ticket_id
+
+        # 保存执行日志到数据库
+        await _save_state_to_db(state)
 
         return CSResponse(
             answer=result["answer"],
@@ -385,32 +415,99 @@ async def customer_service_stream(payload: CSRequest):
     2. 自动派单（DispatchService）
     3. WebSocket 通知客服
     """
-    from app.ai.agents.customer_service import cs_agent
-
     async def generate():
-        transfer_info = None
+        try:
+            # 构建 AgentState
+            state = AgentState(
+                user_input=payload.message,
+                user_id=payload.user_id or 0,
+                conversation_id=payload.conversation_id,
+            )
 
-        async for chunk in cs_agent.stream(
-            payload.message,
-            conversation_id=payload.conversation_id,
-            user_id=payload.user_id,
-        ):
-            yield f"data: {chunk}\n\n"
+            # Hybrid 模式：保存用户消息到 TicketMessage
+            if payload.ticket_id:
+                await _save_ai_message_to_ticket(
+                    ticket_id=payload.ticket_id,
+                    content=payload.message,
+                    user_id=payload.user_id or 0,
+                    sender_type="user",
+                )
 
-            # 解析 done 事件，检查是否需要自动转人工
-            try:
-                data = json.loads(chunk)
-                if data.get("type") == "done" and data.get("need_human"):
-                    # 自动创建工单 + 派单
-                    transfer_info = await _auto_transfer(
-                        content=payload.message,
-                        conversation_id=payload.conversation_id,
-                        user_id=payload.user_id,
-                    )
-                    if transfer_info:
-                        yield f"data: {json.dumps({'type': 'transfer', **transfer_info}, ensure_ascii=False)}\n\n"
-            except (json.JSONDecodeError, Exception):
-                pass
+            # 发送开始状态
+            yield f"data: {json.dumps({'type': 'status', 'content': '正在分析问题...'}, ensure_ascii=False)}\n\n"
+
+            # 调用 SupervisorAgent（内部使用 SmartDeskGraph）
+            state = await supervisor_agent.run(state)
+
+            # 发送知识库搜索结果
+            if state.knowledge_results:
+                sources = [
+                    {
+                        "question": sr.question,
+                        "answer": sr.answer[:200],
+                        "score": round(sr.score, 3),
+                    }
+                    for sr in state.knowledge_results
+                ]
+                yield f"data: {json.dumps({'type': 'sources', 'content': f'找到 {len(sources)} 条相关知识', 'sources': sources}, ensure_ascii=False)}\n\n"
+
+            # 发送工具调用信息
+            if state.tool_logs:
+                yield f"data: {json.dumps({'type': 'status', 'content': f'已调用 {len(state.tool_logs)} 个工具'}, ensure_ascii=False)}\n\n"
+
+            # 如果需要转人工，执行转人工流程
+            transfer_info = None
+            logger.info("[API] need_human=%s, ticket_id=%s", state.need_human, state.ticket_id)
+
+            # 如果 SmartDeskGraph 已经创建了工单（state.ticket_id 已设置）
+            # 构建 transfer_info 并发送 transfer 事件
+            if state.need_human and state.ticket_id:
+                transfer_info = {
+                    "ticket_id": state.ticket_id,
+                    "ticket_no": f"TK{state.ticket_id:06d}",
+                    "title": state.ticket_info.title if state.ticket_info else "",
+                    "ticket_type": state.ticket_type,
+                    "type_name": {
+                        "after_sales": "售后咨询",
+                        "technical": "技术支持",
+                        "refund": "退款申请",
+                        "complaint": "投诉建议",
+                    }.get(state.ticket_type, "售后咨询"),
+                    "priority": state.ticket_priority,
+                    "service_id": state.assignee_id,
+                    "service_name": state.metadata.get("assignee_name", ""),
+                }
+                yield f"data: {json.dumps({'type': 'transfer', **transfer_info}, ensure_ascii=False)}\n\n"
+            # 如果 SmartDeskGraph 没有创建工单，需要手动创建
+            elif state.need_human and not state.ticket_id:
+                yield f"data: {json.dumps({'type': 'status', 'content': '正在创建工单...'}, ensure_ascii=False)}\n\n"
+
+                transfer_info = await _auto_transfer(
+                    content=payload.message,
+                    conversation_id=payload.conversation_id,
+                    user_id=payload.user_id,
+                )
+                if transfer_info:
+                    state.ticket_id = transfer_info.get("ticket_id")
+                    yield f"data: {json.dumps({'type': 'transfer', **transfer_info}, ensure_ascii=False)}\n\n"
+
+            # 发送完成信号
+            yield f"data: {json.dumps({'type': 'done', 'content': state.answer, 'need_human': state.need_human, 'ticket_id': state.ticket_id, 'trace_id': state.trace_id}, ensure_ascii=False)}\n\n"
+
+            # Hybrid 模式：保存 AI 回复到 TicketMessage（供客服查看）
+            if payload.ticket_id and state.answer:
+                await _save_ai_message_to_ticket(
+                    ticket_id=payload.ticket_id,
+                    content=state.answer,
+                    user_id=payload.user_id or 0,
+                )
+
+            # 保存执行日志到数据库
+            await _save_state_to_db(state)
+
+        except Exception as e:
+            logger.error("[API] 流式对话失败: %s", e)
+            yield f"data: {json.dumps({'type': 'error', 'content': str(e)}, ensure_ascii=False)}\n\n"
 
         yield "data: [DONE]\n\n"
 
@@ -510,6 +607,238 @@ async def _auto_transfer(
     except Exception as e:
         logger.error("[AutoTransfer] 自动转人工失败: %s", e)
         return None
+
+
+async def _save_ai_message_to_ticket(
+    ticket_id: int,
+    content: str,
+    user_id: int = 0,
+    sender_type: str = "ai",
+) -> dict | None:
+    """
+    Hybrid 模式：保存消息到 TicketMessage 表，并通过 WebSocket 广播。
+
+    当用户在 hybrid 模式下提问时，用户消息和AI回答都会写入 ticket_messages，
+    人工客服可以在聊天窗口中看到完整的对话内容。
+    """
+    try:
+        from app.core.database import async_session_factory
+        from app.models.ticket_message import TicketMessage
+
+        async with async_session_factory() as db:
+            msg = TicketMessage(
+                ticket_id=ticket_id,
+                sender_id=user_id,
+                sender_type=sender_type,
+                content=content,
+                message_type="text",
+            )
+            db.add(msg)
+            await db.commit()
+            await db.refresh(msg)
+
+            message_data = {
+                "type": "new_message",
+                "message": {
+                    "id": msg.id,
+                    "ticket_id": msg.ticket_id,
+                    "sender_id": msg.sender_id,
+                    "sender_type": msg.sender_type,
+                    "content": msg.content,
+                    "message_type": msg.message_type,
+                    "is_read": msg.is_read,
+                    "created_at": str(msg.created_at) if msg.created_at else None,
+                }
+            }
+
+            logger.info("[HybridMode] 消息已保存: ticket=%d, type=%s", ticket_id, sender_type)
+
+        # 通过 WebSocket 广播到聊天房间
+        try:
+            from app.ai.services.chat_handler import chat_manager
+            room = chat_manager.get_room(ticket_id)
+            await room.broadcast(message_data)
+            logger.info("[HybridMode] 消息已广播: ticket=%d", ticket_id)
+        except Exception as e:
+            logger.warning("[HybridMode] WebSocket 广播失败: %s", e)
+
+        return message_data
+
+    except Exception as e:
+        logger.error("[HybridMode] 保存消息失败: %s", e)
+        return None
+
+
+async def _save_state_to_db(state: AgentState) -> None:
+    """
+    将 AgentState 保存到数据库（Multi-Agent 架构）。
+
+    分离保存：
+    - AgentExecutionLog: Agent 执行日志
+    - ToolExecutionLog: 工具调用日志
+    - AgentStatistics: 每日统计数据
+
+    Args:
+        state: AgentState 对象
+    """
+    try:
+        from app.core.database import async_session_factory
+        from app.models.agent_log import AgentExecutionLog, AgentStatistics, ToolExecutionLog
+        from app.ai.schemas import AgentLog, ToolLog
+
+        async with async_session_factory() as db:
+            # 1. 保存 Agent 执行日志（只保存 AgentLog 对象）
+            agent_logs_data = []
+            for log in state.agent_logs:
+                if isinstance(log, AgentLog):
+                    agent_logs_data.append(log.to_dict())
+
+            log = AgentExecutionLog(
+                trace_id=state.trace_id,
+                user_id=state.user_id,
+                conversation_id=state.conversation_id,
+                user_input=state.user_input,
+                answer=state.answer,
+                need_human=state.need_human,
+                transfer_reason=state.transfer_reason.value if state.transfer_reason else None,
+                ticket_type=state.ticket_type,
+                ticket_priority=state.ticket_priority,
+                ticket_id=state.ticket_id,
+                assignee_id=state.assignee_id,
+                status=state.status.value,
+                total_duration_ms=state.get_total_duration_ms(),
+                agent_count=len(agent_logs_data),
+                tool_count=len(state.tool_logs),
+                agent_logs=agent_logs_data,
+                tool_logs=[],  # 工具日志单独存储
+            )
+            db.add(log)
+
+            # 2. 保存工具调用日志到单独的表
+            for tool_log in state.tool_logs:
+                if isinstance(tool_log, ToolLog):
+                    tool_log_record = ToolExecutionLog(
+                        trace_id=state.trace_id,
+                        tool_name=tool_log.tool_name,
+                        tool_input=tool_log.tool_input,
+                        tool_output=str(tool_log.tool_output)[:1000] if tool_log.tool_output else None,
+                        status=tool_log.status,
+                        error=tool_log.error,
+                        duration_ms=tool_log.duration_ms,
+                    )
+                    db.add(tool_log_record)
+
+            # 3. 更新每日统计
+            from datetime import timezone, timedelta
+            local_tz = timezone(timedelta(hours=8))
+            stat_date = datetime.now(local_tz).date().isoformat()
+
+            result = await db.execute(
+                select(AgentStatistics).where(AgentStatistics.stat_date == stat_date)
+            )
+            stat = result.scalar_one_or_none()
+
+            if not stat:
+                stat = AgentStatistics(
+                    stat_date=stat_date,
+                    knowledge_agent_count=0,
+                    classification_agent_count=0,
+                    priority_agent_count=0,
+                    ticket_creator_agent_count=0,
+                    dispatch_agent_count=0,
+                    tool_calling_agent_count=0,
+                    total_agent_calls=0,
+                    successful_agent_calls=0,
+                    failed_agent_calls=0,
+                    avg_agent_duration_ms=0.0,
+                    query_ticket_count=0,
+                    query_order_count=0,
+                    query_refund_count=0,
+                    search_knowledge_count=0,
+                    search_web_count=0,
+                    total_tool_calls=0,
+                    successful_tool_calls=0,
+                    failed_tool_calls=0,
+                    avg_tool_duration_ms=0.0,
+                    total_conversations=0,
+                    ai_resolved_count=0,
+                    transferred_count=0,
+                    ai_resolution_rate=0.0,
+                    transfer_rate=0.0,
+                    auto_dispatch_rate=0.0,
+                )
+                db.add(stat)
+
+            # 4. 更新 Agent 调用次数（只处理 AgentLog 对象）
+            for agent_log in state.agent_logs:
+                if not isinstance(agent_log, AgentLog):
+                    continue
+
+                agent_name = agent_log.agent_name
+                if agent_name == "knowledge_agent":
+                    stat.knowledge_agent_count = (stat.knowledge_agent_count or 0) + 1
+                elif agent_name == "ticket_classifier":
+                    stat.classification_agent_count = (stat.classification_agent_count or 0) + 1
+                elif agent_name == "priority_analyzer":
+                    stat.priority_agent_count = (stat.priority_agent_count or 0) + 1
+                elif agent_name == "ticket_creator":
+                    stat.ticket_creator_agent_count = (stat.ticket_creator_agent_count or 0) + 1
+                elif agent_name == "dispatcher":
+                    stat.dispatch_agent_count = (stat.dispatch_agent_count or 0) + 1
+                elif agent_name == "tool_calling":
+                    stat.tool_calling_agent_count = (stat.tool_calling_agent_count or 0) + 1
+
+                stat.total_agent_calls = (stat.total_agent_calls or 0) + 1
+                if agent_log.status == "completed":
+                    stat.successful_agent_calls = (stat.successful_agent_calls or 0) + 1
+                else:
+                    stat.failed_agent_calls = (stat.failed_agent_calls or 0) + 1
+
+            # 5. 更新工具调用次数（只处理 ToolLog 对象）
+            for tool_log in state.tool_logs:
+                if not isinstance(tool_log, ToolLog):
+                    continue
+
+                tool_name = tool_log.tool_name
+                if tool_name == "query_ticket":
+                    stat.query_ticket_count = (stat.query_ticket_count or 0) + 1
+                elif tool_name == "query_order":
+                    stat.query_order_count = (stat.query_order_count or 0) + 1
+                elif tool_name == "query_refund":
+                    stat.query_refund_count = (stat.query_refund_count or 0) + 1
+                elif tool_name == "search_knowledge":
+                    stat.search_knowledge_count = (stat.search_knowledge_count or 0) + 1
+                elif tool_name == "search_web":
+                    stat.search_web_count = (stat.search_web_count or 0) + 1
+
+                stat.total_tool_calls = (stat.total_tool_calls or 0) + 1
+                if tool_log.status == "completed":
+                    stat.successful_tool_calls = (stat.successful_tool_calls or 0) + 1
+                else:
+                    stat.failed_tool_calls = (stat.failed_tool_calls or 0) + 1
+
+            # 6. 更新总体统计
+            stat.total_conversations = (stat.total_conversations or 0) + 1
+            if not state.need_human:
+                stat.ai_resolved_count = (stat.ai_resolved_count or 0) + 1
+            else:
+                stat.transferred_count = (stat.transferred_count or 0) + 1
+
+            # 7. 重新计算比率
+            if stat.total_conversations > 0:
+                stat.ai_resolution_rate = round(
+                    (stat.ai_resolved_count or 0) / stat.total_conversations * 100, 2
+                )
+                stat.transfer_rate = round(
+                    (stat.transferred_count or 0) / stat.total_conversations * 100, 2
+                )
+
+            await db.commit()
+            logger.info("[AgentMonitor] 保存 AgentState: %s | Agent: %d | Tool: %d",
+                       state.trace_id, len(agent_logs_data), len(state.tool_logs))
+
+    except Exception as e:
+        logger.error("[AgentMonitor] 保存 AgentState 失败: %s", e)
 
 
 # ============================================================

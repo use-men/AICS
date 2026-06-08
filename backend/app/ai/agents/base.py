@@ -2,7 +2,7 @@
 BaseAgent — 所有 Agent 的抽象基类。
 
 职责:
-    1. 定义 Agent 统一接口
+    1. 定义 Agent 统一接口（run 方法）
     2. 管理 LLM 实例、工具列表、Prompt 模板
     3. 提供 invoke / stream 标准调用方式
     4. 集成 Memory 管理
@@ -18,6 +18,7 @@ from langchain_core.tools import BaseTool
 
 from app.ai.config import ai_settings
 from app.ai.llm import get_llm_for_agent
+from app.ai.schemas import AgentState, AgentType, TaskStatus
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +29,14 @@ class BaseAgent(ABC):
 
     子类必须实现:
         - agent_name: 唯一标识名
+        - agent_type: Agent 类型枚举
         - system_prompt: 系统提示词
-        - build_agent(): 构建 Agent 执行链（LangChain Chain / LangGraph Graph）
+        - run(state): 核心执行逻辑
 
     子类可选覆盖:
         - tools: 工具列表
         - llm: 自定义 LLM 实例
+        - invoke / stream: 调用方式
     """
 
     # ---- 子类必须定义 ----
@@ -41,7 +44,13 @@ class BaseAgent(ABC):
     @property
     @abstractmethod
     def agent_name(self) -> str:
-        """Agent 唯一名称，如 'qa_agent', 'ticket_router'"""
+        """Agent 唯一名称，如 'cs_agent', 'ticket_classifier'"""
+        ...
+
+    @property
+    @abstractmethod
+    def agent_type(self) -> AgentType:
+        """Agent 类型枚举"""
         ...
 
     @property
@@ -74,14 +83,31 @@ class BaseAgent(ABC):
     def __init__(self, **kwargs: Any):
         self._config = kwargs
         self._llm: BaseChatModel = get_llm_for_agent(temperature=self._temperature)
-        logger.info("[Agent] 初始化: %s", self.agent_name)
+        logger.info("[Agent] 初始化: %s (%s)", self.agent_name, self.agent_type.value)
 
-    # ---- 核心接口 ----
+    # ---- 核心接口（统一入口） ----
+
+    @abstractmethod
+    async def run(self, state: AgentState) -> AgentState:
+        """
+        统一执行入口。
+
+        所有 Agent 必须实现此方法，接收 State，处理后返回更新的 State。
+
+        Args:
+            state: 当前 Agent 状态
+
+        Returns:
+            更新后的 Agent 状态
+        """
+        ...
+
+    # ---- 兼容旧接口 ----
 
     @abstractmethod
     async def invoke(self, input_text: str, **kwargs: Any) -> str:
         """
-        同步调用 Agent，返回最终文本结果。
+        同步调用 Agent，返回最终文本结果（兼容旧接口）。
 
         Args:
             input_text: 用户输入
@@ -95,7 +121,7 @@ class BaseAgent(ABC):
     @abstractmethod
     async def stream(self, input_text: str, **kwargs: Any) -> AsyncIterator[str]:
         """
-        流式调用 Agent，逐步 yield 文本片段。
+        流式调用 Agent，逐步 yield 文本片段（兼容旧接口）。
 
         Args:
             input_text: 用户输入
@@ -125,5 +151,16 @@ class BaseAgent(ABC):
         messages.append(HumanMessage(content=user_input))
         return messages
 
+    def _create_state(self, user_input: str, **kwargs: Any) -> AgentState:
+        """创建初始 State"""
+        return AgentState(
+            user_input=user_input,
+            user_id=kwargs.get("user_id", 0),
+            conversation_id=kwargs.get("conversation_id", "default"),
+            ticket_id=kwargs.get("ticket_id"),
+            agent_type=self.agent_type,
+            status=TaskStatus.PROCESSING,
+        )
+
     def __repr__(self) -> str:
-        return f"<{self.__class__.__name__} name={self.agent_name}>"
+        return f"<{self.__class__.__name__} name={self.agent_name} type={self.agent_type.value}>"

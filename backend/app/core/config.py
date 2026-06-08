@@ -22,5 +22,12 @@ class Settings(BaseSettings):
     DEEPSEEK_API_BASE_URL: str = "https://api.deepseek.com/v1"
     DEEPSEEK_MODEL: str = "deepseek-chat"
 
+    # ---- 阿里云 OSS ----
+    OSS_ACCESS_KEY_ID: str = ""
+    OSS_ACCESS_KEY_SECRET: str = ""
+    OSS_BUCKET_NAME: str = "smartdesk-files"
+    OSS_ENDPOINT: str = "oss-cn-beijing.aliyuncs.com"
+    OSS_REGION: str = "cn-beijing"
+
 
 settings = Settings()

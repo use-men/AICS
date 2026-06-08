@@ -2,12 +2,18 @@
 CustomerService model — 客服人员信息。
 """
 
-from datetime import datetime
+from __future__ import annotations
 
-from sqlalchemy import Boolean, DateTime, Integer, String, func
-from sqlalchemy.orm import Mapped, mapped_column
+from datetime import datetime
+from typing import TYPE_CHECKING
+
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+
+if TYPE_CHECKING:
+    from app.models.user import User
 
 
 class CustomerService(Base):
@@ -15,6 +21,7 @@ class CustomerService(Base):
     __tablename__ = "customer_services"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True, unique=True, index=True, comment="关联用户ID")
     name: Mapped[str] = mapped_column(String(50), nullable=False, comment="客服姓名")
     skill_type: Mapped[str] = mapped_column(
         String(50), nullable=False, index=True,
@@ -35,6 +42,9 @@ class CustomerService(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # 关联用户
+    user: Mapped["User | None"] = relationship("User", foreign_keys=[user_id], lazy="selectin")
 
     @property
     def is_available(self) -> bool:

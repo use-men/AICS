@@ -36,6 +36,11 @@ class AISettings(BaseSettings):
     # ---- 转人工 ----
     CONFIDENCE_THRESHOLD: float = 0.3  # 知识库检索最高分低于此值时自动转人工
 
+    # ---- Web Search (Tavily) ----
+    TAVILY_API_KEY: str = ""
+    WEB_SEARCH_ENABLED: bool = True  # 是否启用联网搜索
+    WEB_SEARCH_MAX_RESULTS: int = 5  # 最大搜索结果数
+
     # ---- LangGraph ----
     GRAPH_MAX_STEPS: int = 50
 

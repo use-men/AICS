@@ -9,6 +9,7 @@ import logging
 from typing import Any, AsyncIterator
 
 from app.ai.agents.base import BaseAgent
+from app.ai.schemas import AgentState, AgentType, TaskStatus
 from app.ai.prompts.templates import PRIORITY_SYSTEM
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,10 @@ class PriorityAnalyzerAgent(BaseAgent):
         return "priority_analyzer"
 
     @property
+    def agent_type(self) -> AgentType:
+        return AgentType.PRIORITY_ANALYZER
+
+    @property
     def system_prompt(self) -> str:
         return PRIORITY_SYSTEM
 
@@ -35,9 +40,49 @@ class PriorityAnalyzerAgent(BaseAgent):
     def _temperature(self) -> float:
         return 0.1
 
+    # ---- 核心接口（统一入口） ----
+
+    async def run(self, state: AgentState) -> AgentState:
+        """
+        统一执行入口。
+
+        Args:
+            state: 当前 Agent 状态，需要包含 user_input（JSON 格式的工单信息）
+
+        Returns:
+            更新后的 Agent 状态，包含 ticket_priority
+        """
+        state.agent_type = self.agent_type
+        state.status = TaskStatus.PROCESSING
+
+        try:
+            messages = [
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": state.user_input},
+            ]
+            response = await self.llm.ainvoke(messages)
+            result = self._parse_response(response.content)
+
+            # 解析结果
+            result_data = json.loads(result)
+            state.ticket_priority = result_data.get("priority", "medium")
+            state.metadata["priority_reason"] = result_data.get("reason", "无")
+
+            state.status = TaskStatus.COMPLETED
+
+        except Exception as e:
+            logger.error("[PriorityAnalyzer] 调用失败: %s", e)
+            state.error = str(e)
+            state.status = TaskStatus.FAILED
+            state.ticket_priority = "medium"  # 默认优先级
+
+        return state
+
+    # ---- 兼容旧接口 ----
+
     async def invoke(self, input_text: str, **kwargs: Any) -> str:
         """
-        分析工单优先级。
+        分析工单优先级（兼容旧接口）。
 
         Args:
             input_text: JSON 字符串，包含 title, content, user_level, complaint_count
@@ -46,16 +91,13 @@ class PriorityAnalyzerAgent(BaseAgent):
         Returns:
             JSON 字符串，包含 priority 和 reason
         """
-        messages = [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": input_text},
-        ]
-        try:
-            response = await self.llm.ainvoke(messages)
-            return self._parse_response(response.content)
-        except Exception as e:
-            logger.error("[PriorityAnalyzer] 调用失败: %s", e)
-            return json.dumps(DEFAULT_RESULT, ensure_ascii=False)
+        state = self._create_state(input_text, **kwargs)
+        state = await self.run(state)
+
+        return json.dumps({
+            "priority": state.ticket_priority,
+            "reason": state.metadata.get("priority_reason", "无"),
+        }, ensure_ascii=False)
 
     async def stream(self, input_text: str, **kwargs: Any) -> AsyncIterator[str]:
         result = await self.invoke(input_text, **kwargs)

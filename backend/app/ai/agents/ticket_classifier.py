@@ -9,6 +9,7 @@ import logging
 from typing import Any, AsyncIterator
 
 from app.ai.agents.base import BaseAgent
+from app.ai.schemas import AgentState, AgentType, TaskStatus
 from app.ai.prompts.templates import TICKET_CLASSIFICATION_SYSTEM
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,10 @@ class TicketClassificationAgent(BaseAgent):
         return "ticket_classifier"
 
     @property
+    def agent_type(self) -> AgentType:
+        return AgentType.TICKET_CLASSIFIER
+
+    @property
     def system_prompt(self) -> str:
         return TICKET_CLASSIFICATION_SYSTEM
 
@@ -40,9 +45,49 @@ class TicketClassificationAgent(BaseAgent):
     def _temperature(self) -> float:
         return 0.1  # 分类任务需要低温度，保证稳定性
 
+    # ---- 核心接口（统一入口） ----
+
+    async def run(self, state: AgentState) -> AgentState:
+        """
+        统一执行入口。
+
+        Args:
+            state: 当前 Agent 状态，需要包含 user_input（JSON 格式的 title 和 content）
+
+        Returns:
+            更新后的 Agent 状态，包含 ticket_type
+        """
+        state.agent_type = self.agent_type
+        state.status = TaskStatus.PROCESSING
+
+        try:
+            messages = [
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": state.user_input},
+            ]
+            response = await self.llm.ainvoke(messages)
+            result = self._parse_response(response.content)
+
+            # 解析结果
+            result_data = json.loads(result)
+            state.ticket_type = result_data.get("ticket_type", "after_sales")
+            state.metadata["classification_confidence"] = result_data.get("confidence", 0.5)
+
+            state.status = TaskStatus.COMPLETED
+
+        except Exception as e:
+            logger.error("[TicketClassifier] 调用失败: %s", e)
+            state.error = str(e)
+            state.status = TaskStatus.FAILED
+            state.ticket_type = "after_sales"  # 默认分类
+
+        return state
+
+    # ---- 兼容旧接口 ----
+
     async def invoke(self, input_text: str, **kwargs: Any) -> str:
         """
-        同步分类工单。
+        同步分类工单（兼容旧接口）。
 
         Args:
             input_text: JSON 字符串，包含 title 和 content
@@ -51,16 +96,13 @@ class TicketClassificationAgent(BaseAgent):
         Returns:
             JSON 字符串，包含 ticket_type 和 confidence
         """
-        messages = [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": input_text},
-        ]
-        try:
-            response = await self.llm.ainvoke(messages)
-            return self._parse_response(response.content)
-        except Exception as e:
-            logger.error("[TicketClassifier] 调用失败: %s", e)
-            return json.dumps(DEFAULT_RESULT, ensure_ascii=False)
+        state = self._create_state(input_text, **kwargs)
+        state = await self.run(state)
+
+        return json.dumps({
+            "ticket_type": state.ticket_type,
+            "confidence": state.metadata.get("classification_confidence", 0.5),
+        }, ensure_ascii=False)
 
     async def stream(self, input_text: str, **kwargs: Any) -> AsyncIterator[str]:
         """流式分类（分类任务通常不需要流式，这里简单实现）"""

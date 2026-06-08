@@ -4,12 +4,15 @@ DispatchAgent — 智能工单调度 Agent。
 根据工单类型、优先级、客服技能、负载情况，自动分配最合适的客服。
 """
 
+import json
 import logging
-from typing import Any
+from typing import Any, AsyncIterator
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.agents.base import BaseAgent
+from app.ai.schemas import AgentState, AgentType, TaskStatus
 from app.models.customer_service import CustomerService
 
 logger = logging.getLogger(__name__)
@@ -33,7 +36,7 @@ PRIORITY_WEIGHT = {
 }
 
 
-class DispatchAgent:
+class DispatchAgent(BaseAgent):
     """
     智能调度 Agent — 加权评分算法。
 
@@ -52,6 +55,106 @@ class DispatchAgent:
     WEIGHT_LOAD = 0.3
     WEIGHT_ONLINE = 0.2
     WEIGHT_PRIORITY = 0.1
+
+    @property
+    def agent_name(self) -> str:
+        return "dispatcher"
+
+    @property
+    def agent_type(self) -> AgentType:
+        return AgentType.DISPATCHER
+
+    @property
+    def system_prompt(self) -> str:
+        return ""  # DispatchAgent 不需要 LLM
+
+    @property
+    def _temperature(self) -> float:
+        return 0.0
+
+    # ---- 核心接口（统一入口） ----
+
+    async def run(self, state: AgentState) -> AgentState:
+        """
+        统一执行入口。
+
+        Args:
+            state: 当前 Agent 状态，需要包含 ticket_type 和 ticket_priority
+
+        Returns:
+            更新后的 Agent 状态，包含 assignee_id
+        """
+        state.agent_type = self.agent_type
+        state.status = TaskStatus.PROCESSING
+
+        try:
+            from app.core.database import async_session_factory
+
+            async with async_session_factory() as db:
+                agent = await self.dispatch(
+                    ticket_type=state.ticket_type,
+                    priority=state.ticket_priority,
+                    db=db,
+                )
+
+                if agent:
+                    state.assignee_id = agent.id  # CustomerService 表使用 id 字段
+                    state.metadata["assignee_name"] = agent.name
+                    state.metadata["dispatch_score"] = agent.load_ratio
+                else:
+                    state.error = "无可用客服"
+                    state.status = TaskStatus.FAILED
+                    return state
+
+            state.status = TaskStatus.COMPLETED
+
+        except Exception as e:
+            logger.error("[Dispatch] 调用失败: %s", e)
+            state.error = str(e)
+            state.status = TaskStatus.FAILED
+
+        return state
+
+    # ---- 兼容旧接口 ----
+
+    async def invoke(self, input_text: str, **kwargs: Any) -> str:
+        """
+        分配最合适的客服（兼容旧接口）。
+
+        Args:
+            input_text: JSON 字符串，包含 ticket_type 和 priority
+            **kwargs: 额外参数
+
+        Returns:
+            JSON 字符串，包含 assignee_id 和 assignee_name
+        """
+        try:
+            data = json.loads(input_text) if isinstance(input_text, str) else input_text
+            ticket_type = data.get("ticket_type", "after_sales")
+            priority = data.get("priority", "medium")
+        except (json.JSONDecodeError, AttributeError):
+            ticket_type = "after_sales"
+            priority = "medium"
+
+        state = self._create_state(input_text, **kwargs)
+        state.ticket_type = ticket_type
+        state.ticket_priority = priority
+        state = await self.run(state)
+
+        if state.assignee_id:
+            return json.dumps({
+                "assignee_id": state.assignee_id,
+                "assignee_name": state.metadata.get("assignee_name", ""),
+            }, ensure_ascii=False)
+        else:
+            return json.dumps({
+                "assignee_id": None,
+                "error": state.error or "无可用客服",
+            }, ensure_ascii=False)
+
+    async def stream(self, input_text: str, **kwargs: Any) -> AsyncIterator[str]:
+        result = await self.invoke(input_text, **kwargs)
+        yield result
 
     async def dispatch(
         self,

@@ -141,6 +141,7 @@ const CSTicketListPage: React.FC = () => {
       }
     >
       <Table dataSource={tickets} columns={columns} rowKey="id" loading={loading}
+        scroll={{ x: 900 }}
         pagination={{ current: page, total, pageSize: 10, onChange: setPage, showTotal: (t) => `共 ${t} 条` }} />
     </Card>
   );

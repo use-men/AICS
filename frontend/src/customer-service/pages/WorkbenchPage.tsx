@@ -59,7 +59,8 @@ const WorkbenchPage: React.FC = () => {
   useEffect(() => {
     if (!user?.id) return;
 
-    const wsUrl = `ws://localhost:8000/api/v1/ws/service/${user.id}`;
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/api/v1/ws/service/${user.id}`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 

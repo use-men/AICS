@@ -1,47 +1,74 @@
 /**
  * AgentMonitorPage — 管理端 Agent 监控中心
  *
- * 展示: Agent调用次数、AI解决率、自动派单率、转人工率
+ * 展示: Agent调用次数、AI解决率、自动派单率、转人工率、ECharts图表
  */
 
 import { useState, useEffect } from 'react';
-import { Card, Row, Col, Typography, Statistic, Table, Tag, Space, Progress, Divider } from 'antd';
+import { useNavigate } from 'react-router-dom';
+import { Card, Row, Col, Typography, Statistic, Table, Tag, Space, Progress, Divider, Spin, Button, Select } from 'antd';
 import {
   RobotOutlined, CheckCircleOutlined, SwapOutlined,
   TeamOutlined, BarChartOutlined, ThunderboltOutlined,
+  ReloadOutlined,
 } from '@ant-design/icons';
+import ReactECharts from 'echarts-for-react';
+import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
 
-// ---- 模拟数据（实际应从 API 获取） ----
+// ---- API 接口 ----
 
-const MOCK_STATS = {
-  totalCalls: 1256,
-  aiResolved: 892,
-  aiResolveRate: 0.71,
-  autoDispatched: 634,
-  autoDispatchRate: 0.85,
-  transferToHuman: 364,
-  transferRate: 0.29,
-  avgResponseTime: 1.2,
-};
+interface AgentStats {
+  knowledge_agent_count: number;
+  classification_agent_count: number;
+  priority_agent_count: number;
+  ticket_creator_agent_count: number;
+  dispatch_agent_count: number;
+  tool_calling_agent_count: number;
+  total_agent_calls: number;
+  successful_agent_calls: number;
+  failed_agent_calls: number;
+  avg_agent_duration_ms: number;
+  query_ticket_count: number;
+  query_order_count: number;
+  query_refund_count: number;
+  search_knowledge_count: number;
+  search_web_count: number;
+  total_tool_calls: number;
+  successful_tool_calls: number;
+  failed_tool_calls: number;
+  avg_tool_duration_ms: number;
+  total_conversations: number;
+  ai_resolved_count: number;
+  transferred_count: number;
+  ai_resolution_rate: number;
+  transfer_rate: number;
+  auto_dispatch_rate: number;
+}
 
-const MOCK_AGENT_CALLS = [
-  { agent: 'TicketClassificationAgent', calls: 1256, avgTime: 0.8, successRate: 0.98 },
-  { agent: 'PriorityAnalyzerAgent', calls: 1256, avgTime: 0.6, successRate: 0.99 },
-  { agent: 'KnowledgeAgent', calls: 1089, avgTime: 1.5, successRate: 0.95 },
-  { agent: 'DispatchAgent', calls: 634, avgTime: 0.3, successRate: 1.0 },
-  { agent: 'CustomerServiceAgent', calls: 1089, avgTime: 2.1, successRate: 0.93 },
-  { agent: 'TicketCreationAgent', calls: 364, avgTime: 1.8, successRate: 0.97 },
-];
+interface ExecutionLog {
+  id: number;
+  trace_id: string;
+  user_id: number;
+  user_input: string;
+  answer: string | null;
+  need_human: boolean;
+  ticket_type: string | null;
+  ticket_priority: string | null;
+  status: string;
+  total_duration_ms: number;
+  agent_count: number;
+  tool_count: number;
+  agent_logs: any;
+  tool_logs: any;
+  created_at: string | null;
+}
 
-const MOCK_RECENT_CONVERSATIONS = [
-  { id: 1, time: '22:30:15', question: '怎么登录系统？', answer: 'AI直接回答', type: 'after_sales', resolved: true },
-  { id: 2, time: '22:28:42', question: '产品有质量问题', answer: '转人工', type: 'refund', resolved: false },
-  { id: 3, time: '22:25:18', question: '系统崩溃了', answer: 'AI直接回答', type: 'technical', resolved: true },
-  { id: 4, time: '22:22:05', question: '如何配置通知？', answer: 'AI直接回答', type: 'after_sales', resolved: true },
-  { id: 5, time: '22:18:33', question: '申请退款', answer: '转人工', type: 'refund', resolved: false },
-];
+interface DailyStats {
+  date: string;
+  stats: AgentStats;
+}
 
 // ---- 统计卡片组件 ----
 
@@ -81,9 +108,132 @@ const StatCard: React.FC<{
 // ---- 主组件 ----
 
 const AgentMonitorPage: React.FC = () => {
-  const [stats, setStats] = useState(MOCK_STATS);
-  const [agentCalls, setAgentCalls] = useState(MOCK_AGENT_CALLS);
-  const [conversations, setConversations] = useState(MOCK_RECENT_CONVERSATIONS);
+  const navigate = useNavigate();
+  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState<AgentStats | null>(null);
+  const [dailyStats, setDailyStats] = useState<DailyStats[]>([]);
+  const [executionLogs, setExecutionLogs] = useState<ExecutionLog[]>([]);
+  const [days, setDays] = useState(7);
+
+  // 获取统计数据
+  const fetchStats = async () => {
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('access_token') || sessionStorage.getItem('access_token');
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      // 获取统计数据
+      const statsRes = await fetch(`/api/v1/agent-monitor/stats?days=${days}`, { headers });
+      if (statsRes.ok) {
+        const statsData = await statsRes.json();
+        setStats(statsData);
+      }
+
+      // 获取每日统计
+      const dailyRes = await fetch(`/api/v1/agent-monitor/daily-stats?days=${days}`, { headers });
+      if (dailyRes.ok) {
+        const dailyData = await dailyRes.json();
+        setDailyStats(dailyData);
+      }
+
+      // 获取执行日志
+      const logsRes = await fetch(`/api/v1/agent-monitor/execution-logs?page=1&page_size=10`, { headers });
+      if (logsRes.ok) {
+        const logsData = await logsRes.json();
+        setExecutionLogs(logsData);
+      }
+    } catch (error) {
+      console.error('获取数据失败:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchStats();
+  }, [days]);
+
+  // Agent 调用数据
+  const agentCallsData = stats ? [
+    { agent: 'KnowledgeAgent', calls: stats.knowledge_agent_count, avgTime: stats.avg_agent_duration_ms, successRate: stats.total_agent_calls > 0 ? stats.successful_agent_calls / stats.total_agent_calls : 0 },
+    { agent: 'ClassificationAgent', calls: stats.classification_agent_count, avgTime: stats.avg_agent_duration_ms, successRate: stats.total_agent_calls > 0 ? stats.successful_agent_calls / stats.total_agent_calls : 0 },
+    { agent: 'PriorityAgent', calls: stats.priority_agent_count, avgTime: stats.avg_agent_duration_ms, successRate: stats.total_agent_calls > 0 ? stats.successful_agent_calls / stats.total_agent_calls : 0 },
+    { agent: 'TicketCreatorAgent', calls: stats.ticket_creator_agent_count, avgTime: stats.avg_agent_duration_ms, successRate: stats.total_agent_calls > 0 ? stats.successful_agent_calls / stats.total_agent_calls : 0 },
+    { agent: 'DispatchAgent', calls: stats.dispatch_agent_count, avgTime: stats.avg_agent_duration_ms, successRate: stats.total_agent_calls > 0 ? stats.successful_agent_calls / stats.total_agent_calls : 0 },
+    { agent: 'ToolCallingAgent', calls: stats.tool_calling_agent_count, avgTime: stats.avg_agent_duration_ms, successRate: stats.total_agent_calls > 0 ? stats.successful_agent_calls / stats.total_agent_calls : 0 },
+  ] : [];
+
+  // ECharts 配置 - Agent 调用趋势
+  const agentTrendOption = {
+    tooltip: { trigger: 'axis' },
+    legend: { data: ['AI解决', '转人工'] },
+    xAxis: { type: 'category', data: dailyStats.map(d => d.date) },
+    yAxis: { type: 'value' },
+    series: [
+      {
+        name: 'AI解决',
+        type: 'line',
+        smooth: true,
+        data: dailyStats.map(d => d.stats.ai_resolved_count),
+        itemStyle: { color: '#52c41a' },
+      },
+      {
+        name: '转人工',
+        type: 'line',
+        smooth: true,
+        data: dailyStats.map(d => d.stats.transferred_count),
+        itemStyle: { color: '#fa8c16' },
+      },
+    ],
+  };
+
+  // ECharts 配置 - Agent 调用分布
+  const agentPieOption = stats ? {
+    tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+    legend: { orient: 'vertical', left: 'left' },
+    series: [
+      {
+        type: 'pie',
+        radius: '50%',
+        data: [
+          { value: stats.knowledge_agent_count, name: 'KnowledgeAgent' },
+          { value: stats.classification_agent_count, name: 'ClassificationAgent' },
+          { value: stats.priority_agent_count, name: 'PriorityAgent' },
+          { value: stats.ticket_creator_agent_count, name: 'TicketCreatorAgent' },
+          { value: stats.dispatch_agent_count, name: 'DispatchAgent' },
+          { value: stats.tool_calling_agent_count, name: 'ToolCallingAgent' },
+        ],
+        emphasis: {
+          itemStyle: { shadowBlur: 10, shadowOffsetX: 0, shadowColor: 'rgba(0, 0, 0, 0.5)' },
+        },
+      },
+    ],
+  } : {};
+
+  // ECharts 配置 - 工具调用分布
+  const toolPieOption = stats ? {
+    tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+    legend: { orient: 'vertical', left: 'left' },
+    series: [
+      {
+        type: 'pie',
+        radius: '50%',
+        data: [
+          { value: stats.query_ticket_count, name: 'query_ticket' },
+          { value: stats.query_order_count, name: 'query_order' },
+          { value: stats.query_refund_count, name: 'query_refund' },
+          { value: stats.search_knowledge_count, name: 'search_knowledge' },
+          { value: stats.search_web_count, name: 'search_web' },
+        ],
+        emphasis: {
+          itemStyle: { shadowBlur: 10, shadowOffsetX: 0, shadowColor: 'rgba(0, 0, 0, 0.5)' },
+        },
+      },
+    ],
+  } : {};
 
   // Agent 调用列表 columns
   const agentColumns = [
@@ -103,7 +253,7 @@ const AgentMonitorPage: React.FC = () => {
       title: '平均耗时',
       dataIndex: 'avgTime',
       key: 'avgTime',
-      render: (v: number) => <Tag color="blue">{v}s</Tag>,
+      render: (v: number) => <Tag color="blue">{v.toFixed(1)}ms</Tag>,
     },
     {
       title: '成功率',
@@ -119,117 +269,178 @@ const AgentMonitorPage: React.FC = () => {
     },
   ];
 
-  // 最近对话列表 columns
-  const conversationColumns = [
+  // 执行日志 columns
+  const logColumns = [
     {
-      title: '时间',
-      dataIndex: 'time',
-      key: 'time',
-      width: 80,
+      title: 'Trace ID',
+      dataIndex: 'trace_id',
+      key: 'trace_id',
+      width: 200,
+      ellipsis: true,
+      render: (v: string) => (
+        <a
+          onClick={() => navigate(`/admin/agent-monitor/${v}`)}
+          style={{ cursor: 'pointer', color: '#1890ff' }}
+        >
+          {v.slice(0, 8)}...
+        </a>
+      ),
     },
     {
       title: '用户问题',
-      dataIndex: 'question',
-      key: 'question',
+      dataIndex: 'user_input',
+      key: 'user_input',
       ellipsis: true,
     },
     {
-      title: '处理方式',
-      dataIndex: 'answer',
-      key: 'answer',
-      render: (v: string) => (
-        <Tag color={v === 'AI直接回答' ? 'green' : 'orange'}>{v}</Tag>
-      ),
-    },
-    {
-      title: '分类',
-      dataIndex: 'type',
-      key: 'type',
-      render: (v: string) => <Tag>{v}</Tag>,
-    },
-    {
       title: '状态',
-      dataIndex: 'resolved',
-      key: 'resolved',
-      render: (v: boolean) => (
-        <Tag color={v ? 'success' : 'processing'}>{v ? '已解决' : '处理中'}</Tag>
+      dataIndex: 'status',
+      key: 'status',
+      render: (v: string) => (
+        <Tag color={v === 'completed' ? 'success' : v === 'failed' ? 'error' : 'processing'}>
+          {v === 'completed' ? '成功' : v === 'failed' ? '失败' : '处理中'}
+        </Tag>
       ),
+    },
+    {
+      title: '耗时',
+      dataIndex: 'total_duration_ms',
+      key: 'total_duration_ms',
+      render: (v: number) => <Tag color="blue">{v.toFixed(0)}ms</Tag>,
+    },
+    {
+      title: 'Agent数',
+      dataIndex: 'agent_count',
+      key: 'agent_count',
+      render: (v: number) => <Tag>{v}</Tag>,
+    },
+    {
+      title: '工具数',
+      dataIndex: 'tool_count',
+      key: 'tool_count',
+      render: (v: number) => <Tag>{v}</Tag>,
+    },
+    {
+      title: '需要转人工',
+      dataIndex: 'need_human',
+      key: 'need_human',
+      render: (v: boolean) => (
+        <Tag color={v ? 'orange' : 'green'}>{v ? '是' : '否'}</Tag>
+      ),
+    },
+    {
+      title: '创建时间',
+      dataIndex: 'created_at',
+      key: 'created_at',
+      render: (v: string) => v ? dayjs(v).format('MM-DD HH:mm:ss') : '-',
     },
   ];
 
   return (
-    <div style={{ padding: 0 }}>
-      <Title level={4} style={{ marginBottom: 24 }}>
-        <RobotOutlined /> Agent 监控中心
-      </Title>
+    <Spin spinning={loading}>
+      <div style={{ padding: 0 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+          <Title level={4} style={{ margin: 0 }}>
+            <RobotOutlined /> Agent 监控中心
+          </Title>
+          <Space>
+            <Select value={days} onChange={setDays} style={{ width: 120 }}>
+              <Select.Option value={7}>最近 7 天</Select.Option>
+              <Select.Option value={14}>最近 14 天</Select.Option>
+              <Select.Option value={30}>最近 30 天</Select.Option>
+            </Select>
+            <Button icon={<ReloadOutlined />} onClick={fetchStats}>刷新</Button>
+          </Space>
+        </div>
 
-      {/* 统计卡片 */}
-      <Row gutter={[16, 16]}>
-        <Col xs={24} sm={12} lg={6}>
-          <StatCard
-            title="Agent 总调用"
-            value={stats.totalCalls}
-            icon={<BarChartOutlined style={{ fontSize: 20, color: '#667eea' }} />}
-            color="#667eea"
-          />
-        </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <StatCard
-            title="AI 解决率"
-            value={`${Math.round(stats.aiResolveRate * 100)}%`}
-            icon={<CheckCircleOutlined style={{ fontSize: 20, color: '#52c41a' }} />}
-            color="#52c41a"
-            percent={stats.aiResolveRate}
-          />
-        </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <StatCard
-            title="自动派单率"
-            value={`${Math.round(stats.autoDispatchRate * 100)}%`}
-            icon={<SwapOutlined style={{ fontSize: 20, color: '#1890ff' }} />}
-            color="#1890ff"
-            percent={stats.autoDispatchRate}
-          />
-        </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <StatCard
-            title="转人工率"
-            value={`${Math.round(stats.transferRate * 100)}%`}
-            icon={<TeamOutlined style={{ fontSize: 20, color: '#fa8c16' }} />}
-            color="#fa8c16"
-            percent={stats.transferRate}
-          />
-        </Col>
-      </Row>
-
-      <Divider />
-
-      {/* Agent 调用详情 */}
-      <Row gutter={16}>
-        <Col xs={24} lg={14}>
-          <Card title={<><ThunderboltOutlined /> Agent 调用详情</>}>
-            <Table
-              dataSource={agentCalls}
-              columns={agentColumns}
-              rowKey="agent"
-              pagination={false}
-              size="small"
+        {/* 统计卡片 */}
+        <Row gutter={[16, 16]}>
+          <Col xs={24} sm={12} lg={6}>
+            <StatCard
+              title="Agent 总调用"
+              value={stats?.total_agent_calls || 0}
+              icon={<BarChartOutlined style={{ fontSize: 20, color: '#667eea' }} />}
+              color="#667eea"
             />
-          </Card>
-        </Col>
-        <Col xs={24} lg={10}>
-          <Card title={<><BarChartOutlined /> 最近对话</>}>
-            <Table
-              dataSource={conversations}
-              columns={conversationColumns}
-              rowKey="id"
-              pagination={false}
-              size="small"
+          </Col>
+          <Col xs={24} sm={12} lg={6}>
+            <StatCard
+              title="AI 解决率"
+              value={`${stats?.ai_resolution_rate || 0}%`}
+              icon={<CheckCircleOutlined style={{ fontSize: 20, color: '#52c41a' }} />}
+              color="#52c41a"
+              percent={(stats?.ai_resolution_rate || 0) / 100}
             />
-          </Card>
-        </Col>
-      </Row>
-    </div>
+          </Col>
+          <Col xs={24} sm={12} lg={6}>
+            <StatCard
+              title="自动派单率"
+              value={`${stats?.auto_dispatch_rate || 0}%`}
+              icon={<SwapOutlined style={{ fontSize: 20, color: '#1890ff' }} />}
+              color="#1890ff"
+              percent={(stats?.auto_dispatch_rate || 0) / 100}
+            />
+          </Col>
+          <Col xs={24} sm={12} lg={6}>
+            <StatCard
+              title="转人工率"
+              value={`${stats?.transfer_rate || 0}%`}
+              icon={<TeamOutlined style={{ fontSize: 20, color: '#fa8c16' }} />}
+              color="#fa8c16"
+              percent={(stats?.transfer_rate || 0) / 100}
+            />
+          </Col>
+        </Row>
+
+        <Divider />
+
+        {/* ECharts 图表 */}
+        <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+          <Col xs={24} lg={12}>
+            <Card title="AI 解决 vs 转人工 趋势">
+              <ReactECharts option={agentTrendOption} style={{ height: 300 }} />
+            </Card>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Card title="Agent 调用分布">
+              <ReactECharts option={agentPieOption} style={{ height: 300 }} />
+            </Card>
+          </Col>
+        </Row>
+
+        <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+          <Col xs={24} lg={12}>
+            <Card title="工具调用分布">
+              <ReactECharts option={toolPieOption} style={{ height: 300 }} />
+            </Card>
+          </Col>
+          <Col xs={24} lg={12}>
+            <Card title="Agent 调用详情">
+              <Table
+                dataSource={agentCallsData}
+                columns={agentColumns}
+                rowKey="agent"
+                pagination={false}
+                size="small"
+              />
+            </Card>
+          </Col>
+        </Row>
+
+        <Divider />
+
+        {/* 执行日志 */}
+        <Card title={<><ThunderboltOutlined /> 最近执行日志</>}>
+          <Table
+            dataSource={executionLogs}
+            columns={logColumns}
+            rowKey="id"
+            pagination={{ pageSize: 10 }}
+            size="small"
+          />
+        </Card>
+      </div>
+    </Spin>
   );
 };
 

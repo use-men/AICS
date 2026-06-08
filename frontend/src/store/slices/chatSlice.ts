@@ -6,12 +6,13 @@ import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 
 export interface ChatMessage {
   id: string;
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant' | 'system' | 'agent';
   content: string;
   timestamp: number;
   status?: 'sending' | 'streaming' | 'done' | 'error';
   sources?: Array<{ question: string; answer: string; score: number }>;
   needHuman?: boolean;
+  thinkingContent?: string;
   transferInfo?: {
     ticket_id: number;
     ticket_no: string;
@@ -24,11 +25,18 @@ export interface ChatMessage {
   };
 }
 
+/** 会话模式 */
+export type ConversationMode = 'ai' | 'hybrid' | 'human';
+
 interface ChatState {
   /** AI 问答消息列表 */
   messages: ChatMessage[];
   /** 后端会话 ID */
   conversationId: string;
+  /** 当前会话模式 */
+  mode: ConversationMode;
+  /** 当前工单 ID（hybrid/human 模式） */
+  ticketId: number | null;
 }
 
 // ============================================================
@@ -52,11 +60,16 @@ function loadState(): ChatState {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed.messages) && parsed.messages.length > 0) {
-        return parsed;
+        return {
+          messages: parsed.messages,
+          conversationId: parsed.conversationId || '',
+          mode: parsed.mode || 'ai',
+          ticketId: parsed.ticketId || null,
+        };
       }
     }
   } catch {}
-  return { messages: [WELCOME_MSG], conversationId: '' };
+  return { messages: [WELCOME_MSG], conversationId: '', mode: 'ai', ticketId: null };
 }
 
 function saveState(state: ChatState) {
@@ -64,6 +77,8 @@ function saveState(state: ChatState) {
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
       messages: state.messages,
       conversationId: state.conversationId,
+      mode: state.mode,
+      ticketId: state.ticketId,
     }));
   } catch {}
 }
@@ -93,6 +108,9 @@ const chatSlice = createSlice({
       const idx = state.messages.findIndex((m) => m.id === action.payload.id);
       if (idx !== -1) {
         state.messages[idx] = action.payload;
+      } else {
+        // 如果消息不存在（可能是刷新后丢失），添加它
+        state.messages.push(action.payload);
       }
       saveState(state);
     },
@@ -121,11 +139,40 @@ const chatSlice = createSlice({
         },
       ];
       state.conversationId = '';
+      state.mode = 'ai';
+      state.ticketId = null;
+      saveState(state);
+    },
+
+    /** 设置会话模式 */
+    setMode(state, action: PayloadAction<ConversationMode>) {
+      state.mode = action.payload;
+      saveState(state);
+    },
+
+    /** 设置工单 ID（进入 hybrid/human 模式） */
+    setTicketId(state, action: PayloadAction<number | null>) {
+      state.ticketId = action.payload;
+      saveState(state);
+    },
+
+    /** 切换到 hybrid 模式 */
+    switchToHybrid(state, action: PayloadAction<{ ticketId: number; ticketNo: string }>) {
+      state.mode = 'hybrid';
+      state.ticketId = action.payload.ticketId;
       saveState(state);
     },
   },
 });
 
-export const { addMessage, updateMessage, setMessages, setConversationId, clearMessages } =
-  chatSlice.actions;
+export const {
+  addMessage,
+  updateMessage,
+  setMessages,
+  setConversationId,
+  clearMessages,
+  setMode,
+  setTicketId,
+  switchToHybrid,
+} = chatSlice.actions;
 export default chatSlice.reducer;

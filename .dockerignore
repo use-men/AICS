@@ -1,0 +1,26 @@
+# Git
+.git
+.github
+
+# Node
+frontend/node_modules
+frontend/.vite
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+.venv
+venv
+.env
+
+# IDE
+.vscode
+.idea
+
+# Docker
+docker-compose.yml
+
+# Docs
+*.md
+LICENSE

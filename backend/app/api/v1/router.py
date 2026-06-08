@@ -38,3 +38,19 @@ api_v1_router.include_router(ws.router)
 # Chat WebSocket
 from app.api.v1 import chat_ws  # noqa: E402
 api_v1_router.include_router(chat_ws.router)
+
+# Upload (OSS)
+from app.api.v1 import upload  # noqa: E402
+api_v1_router.include_router(upload.router)
+
+# Agent Monitor
+from app.api.v1 import agent_monitor  # noqa: E402
+api_v1_router.include_router(agent_monitor.router)
+
+# Conversation (Hybrid Mode)
+from app.api.v1 import conversation  # noqa: E402
+api_v1_router.include_router(conversation.router)
+
+# Roles Management
+from app.api.v1 import roles  # noqa: E402
+api_v1_router.include_router(roles.router)

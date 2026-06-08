@@ -6,6 +6,7 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -110,7 +111,15 @@ async def client_phone_login(
         await db.refresh(user)
         logger.info("Auto-registered phone user: %s (id=%d)", payload.phone, user.id)
 
-    # 3. 签发 token
+    # 3. 检查用户角色（客服/管理员不能通过用户端登录）
+    cs_role_codes = {"customer_service", "agent", "supervisor", "admin"}
+    if user.role_codes and cs_role_codes.intersection(user.role_codes):
+        raise HTTPException(
+            status_code=403,
+            detail="客服/管理员账号请使用对应端口登录"
+        )
+
+    # 4. 签发 token
     tokens = create_token_pair(user.id, extra={"roles": user.role_codes})
     return TokenPairResponse(**tokens)
 
@@ -136,6 +145,14 @@ async def client_email_login(
 
     if not user.is_active:
         raise HTTPException(status_code=403, detail="账号已被禁用")
+
+    # 检查用户角色（客服/管理员不能通过用户端登录）
+    cs_role_codes = {"customer_service", "agent", "supervisor", "admin"}
+    if user.role_codes and cs_role_codes.intersection(user.role_codes):
+        raise HTTPException(
+            status_code=403,
+            detail="客服/管理员账号请使用对应端口登录"
+        )
 
     tokens = create_token_pair(user.id, extra={"roles": user.role_codes})
     return TokenPairResponse(**tokens)
@@ -207,7 +224,7 @@ async def cs_login(
     if not cs_roles.intersection(set(user.role_codes)):
         raise HTTPException(status_code=403, detail="该账号没有客服权限")
 
-    tokens = create_token_pair(
+    tokens = create_token_pair(  
         user.id,
         extra={
             "roles": user.role_codes,
@@ -332,6 +349,40 @@ async def refresh_token(
 @router.get("/me", response_model=UserInfoResponse)
 async def get_me(current_user: User = Depends(get_current_user)) -> UserInfoResponse:
     """获取当前登录用户信息"""
+    return UserInfoResponse(**_build_user_info(current_user))
+
+
+# ================================================================
+#  8.1 更新用户信息  PUT /api/v1/auth/me
+# ================================================================
+
+
+class UpdateUserRequest(BaseModel):
+    """更新用户信息请求"""
+    nickname: str | None = None
+    email: str | None = None
+    avatar: str | None = None
+
+
+@router.put("/me", response_model=UserInfoResponse)
+async def update_me(
+    payload: UpdateUserRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserInfoResponse:
+    """更新当前登录用户信息"""
+    # 更新字段
+    if payload.nickname is not None:
+        current_user.nickname = payload.nickname
+    if payload.email is not None:
+        current_user.email = payload.email
+    if payload.avatar is not None:
+        current_user.avatar = payload.avatar
+
+    await db.commit()
+    await db.refresh(current_user)
+
+    logger.info("[Auth] 用户 %d 更新信息: %s", current_user.id, payload.model_dump(exclude_none=True))
     return UserInfoResponse(**_build_user_info(current_user))
 
 

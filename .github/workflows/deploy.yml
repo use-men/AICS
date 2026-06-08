@@ -7,7 +7,9 @@ on:
     branches: [main]
 
 jobs:
-  # ---- 后端测试 ----
+  # ============================================
+  # 后端测试
+  # ============================================
   backend-test:
     runs-on: ubuntu-latest
     steps:
@@ -30,8 +32,12 @@ jobs:
           python -m py_compile app/api/v1/agent.py
           python -m py_compile app/api/v1/tickets.py
           python -m py_compile app/api/v1/auth.py
+          python -m py_compile app/api/v1/chat.py
+          python -m py_compile app/api/v1/knowledge.py
 
-  # ---- 前端构建 ----
+  # ============================================
+  # 前端构建
+  # ============================================
   frontend-build:
     runs-on: ubuntu-latest
     steps:
@@ -59,28 +65,78 @@ jobs:
           cd frontend
           npm run build
 
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-dist
-          path: frontend/dist/
-
-  # ---- 部署（仅 main 分支 push 时触发）----
+  # ============================================
+  # 部署（仅 main 分支 push 时触发）
+  # ============================================
   deploy:
     needs: [backend-test, frontend-build]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download build artifact
-        uses: actions/download-artifact@v4
+      - name: Deploy to server via SSH
+        uses: appleboy/ssh-action@v1
         with:
-          name: frontend-dist
-          path: frontend/dist/
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USERNAME }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          script: |
+            # 进入项目目录
+            cd /opt/SmartDesk
 
-      - name: Deploy info
+            # 拉取最新代码
+            echo "📥 拉取最新代码..."
+            git pull origin main
+
+            # 写入环境变量（如果 .env 不存在则创建）
+            if [ ! -f .env ]; then
+              echo "📝 创建 .env 文件..."
+              cat > .env << 'ENVEOF'
+            DEEPSEEK_API_KEY=${{ secrets.DEPLOY_DEEPSEEK_API_KEY }}
+            JWT_SECRET_KEY=${{ secrets.DEPLOY_JWT_SECRET }}
+            CORS_ORIGINS=["http://${{ secrets.DEPLOY_HOST }}:8000"]
+            ENVEOF
+            fi
+
+            # 停止旧容器
+            echo "⏹ 停止旧容器..."
+            docker-compose down
+
+            # 重新构建并启动
+            echo "🔨 构建并启动容器..."
+            docker-compose up -d --build
+
+            # 等待 MySQL 就绪
+            echo "⏳ 等待 MySQL 就绪..."
+            sleep 20
+
+            # 初始化数据库（建表 + 种子数据）
+            echo "🗃 初始化数据库..."
+            docker-compose exec -T backend python scripts/init_db.py || true
+            docker-compose exec -T backend python scripts/seed.py || true
+            docker-compose exec -T backend python scripts/seed_cs.py || true
+            docker-compose exec -T backend python scripts/seed_roles.py || true
+
+            # 健康检查
+            echo "🔍 健康检查..."
+            for i in 1 2 3 4 5; do
+              if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+                echo "✅ 部署成功！服务已启动。"
+                exit 0
+              fi
+              echo "  尝试 $i/5..."
+              sleep 3
+            done
+
+            echo "❌ 健康检查失败，请查看日志："
+            docker-compose logs --tail=30 backend
+            exit 1
+
+      - name: Deployment summary
         run: |
-          echo "✅ Build successful!"
-          echo "Frontend dist ready for deployment."
-          echo "Configure your deployment target (Vercel/Netlify/Docker) below."
+          echo "## 🚀 部署完成" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- 服务地址: http://${{ secrets.DEPLOY_HOST }}:8000" >> $GITHUB_STEP_SUMMARY
+          echo "- 健康检查: http://${{ secrets.DEPLOY_HOST }}:8000/health" >> $GITHUB_STEP_SUMMARY
